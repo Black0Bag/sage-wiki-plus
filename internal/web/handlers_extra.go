@@ -192,17 +192,17 @@ func (s *WebServer) handleCompile(w http.ResponseWriter, r *http.Request) {
 func (s *WebServer) handleModels(w http.ResponseWriter, r *http.Request) {
 	models := map[string]any{
 		"configured": map[string]string{
-			"llm":       s.cfg.LLM.Model,
-			"embedding": s.cfg.Embedding.Model,
+			"llm":       s.cfg.Models.Summarize,
+			"embedding": "",
 		},
 		"providers": []map[string]any{},
 	}
 
-	if s.cfg.LLM.APIBase != "" {
-		models["llm_api_base"] = s.cfg.LLM.APIBase
+	if s.cfg.API.BaseURL != "" {
+		models["llm_api_base"] = s.cfg.API.BaseURL
 	}
-	if s.cfg.Embedding.APIBase != "" {
-		models["embedding_api_base"] = s.cfg.Embedding.APIBase
+	if s.cfg.Embed != nil && s.cfg.Embed.BaseURL != "" {
+		models["embedding_api_base"] = s.cfg.Embed.BaseURL
 	}
 
 	writeJSON(w, models)
