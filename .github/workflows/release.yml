@@ -1,63 +1,38 @@
 name: Auto Release
-
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-
       - name: Build
-        run: |
-          go build -tags webui -o sage-wiki-plus ./cmd/sage-wiki
-          echo "Binary size: $(ls -lh sage-wiki-plus | awk '{print $5}')"
-
-      - name: Create Release
+        run: go build -tags webui -o sage-wiki-plus ./cmd/sage-wiki
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           LAST_TAG=$(git tag --sort=-v:refname | head -1 || echo "")
           if [ -n "$LAST_TAG" ]; then
             NEW_COUNT=$(git log "$LAST_TAG"..HEAD --oneline 2>/dev/null | wc -l)
+            echo "Changes: $NEW_COUNT"
+            if [ "$NEW_COUNT" -eq 0 ]; then exit 0; fi
             NOTES=$(git log "$LAST_TAG"..HEAD --oneline --no-decorate 2>/dev/null | head -50)
           else
-            NEW_COUNT=$(git log --oneline 2>/dev/null | wc -l)
+            echo "No previous tag"
             NOTES=$(git log --oneline --no-decorate 2>/dev/null | head -50)
           fi
-
-          if [ "$NEW_COUNT" -eq 0 ]; then
-            echo "No changes since last release. Skipping."
-            exit 0
-          fi
-
           VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
-          echo "Creating release: $VERSION ($NEW_COUNT new commits)"
-
-          tar czf "sage-wiki-plus-${VERSION}.tar.gz" sage-wiki-plus
-
           gh release create "$VERSION" \
             --title "sage-wiki-plus $VERSION" \
-            --notes "## Auto Release
-
-### Changes since last release
-$NOTES
-
----
-*Automatically built by GitHub Actions*" \
-            "sage-wiki-plus-${VERSION}.tar.gz" \
+            --notes "Auto build $VERSION" \
             sage-wiki-plus
-
-          echo "Release $VERSION created successfully"
