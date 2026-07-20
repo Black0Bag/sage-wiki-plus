@@ -5,31 +5,32 @@ on:
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Configure Git
         run: |
           git config user.name "Black0Bag"
           git config user.email "black0bag@users.noreply.github.com"
 
-      - name: Run sync script
-        shell: bash
+      - name: Sync and patch
         run: |
           chmod +x scripts/sync-upstream.sh
-          ./scripts/sync-upstream.sh
+          bash scripts/sync-upstream.sh
 
-      - name: Push changes
+      - name: Push
         run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No changes to push"
           else
-            git push origin main
+            git push origin HEAD:main
           fi
