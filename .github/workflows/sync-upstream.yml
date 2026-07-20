@@ -2,15 +2,15 @@ name: Sync Upstream
 
 on:
   schedule:
-    # 每 6 小时检测一次
     - cron: '0 */6 * * *'
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -21,10 +21,10 @@ jobs:
           git config user.email "black0bag@users.noreply.github.com"
 
       - name: Run sync script
+        shell: bash
         run: |
           chmod +x scripts/sync-upstream.sh
           ./scripts/sync-upstream.sh
-        shell: bash
 
       - name: Push changes
         run: |

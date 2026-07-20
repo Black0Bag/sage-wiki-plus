@@ -2,7 +2,6 @@ name: Auto Release
 
 on:
   schedule:
-    # 每 30 分钟检测一次变更
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
@@ -10,10 +9,11 @@ permissions:
   contents: write
 
 jobs:
-  check-and-release:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -21,66 +21,65 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.24'
 
       - name: Configure Git
         run: |
           git config user.name "Black0Bag"
           git config user.email "black0bag@users.noreply.github.com"
 
-      - name: Check for changes and auto-release
+      - name: Check for changes and build
+        id: check
         run: |
-          chmod +x scripts/auto-release.sh
-
-          # 获取上次 Release
           LAST_TAG=$(git tag --sort=-v:refname | head -1 || echo "")
-          echo "Last release tag: $LAST_TAG"
+          echo "last_tag=$LAST_TAG" >> $GITHUB_OUTPUT
 
-          # 计算新 commit
           if [ -n "$LAST_TAG" ]; then
             NEW_COMMITS=$(git log "$LAST_TAG"..HEAD --oneline 2>/dev/null | wc -l)
           else
             NEW_COMMITS=$(git log --oneline 2>/dev/null | wc -l)
           fi
 
-          echo "New commits: $NEW_COMMITS"
+          echo "new_commits=$NEW_COMMITS" >> $GITHUB_OUTPUT
+          echo "New commits since last tag: $NEW_COMMITS"
 
           if [ "$NEW_COMMITS" -eq 0 ]; then
-            echo "No changes, skipping"
-            exit 0
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-          # 编译
-          echo "Building..."
-          go build -tags webui -o sage-wiki-plus .
+      - name: Build binary
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          go build -tags webui -o sage-wiki-plus ./cmd/sage-wiki
+          ls -lh sage-wiki-plus
 
-          # 生成版本号
-          VERSION="v$(date +'%Y.%-m.%-d')-$(git rev-parse --short HEAD)"
-          echo "Version: $VERSION"
+      - name: Create Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          echo "Creating release $VERSION"
 
-          # 打包
           tar czf "sage-wiki-plus-${VERSION}.tar.gz" sage-wiki-plus
 
-          # 生成变更日志
+          LAST_TAG="${{ steps.check.outputs.last_tag }}"
           if [ -n "$LAST_TAG" ]; then
             NOTES=$(git log "$LAST_TAG"..HEAD --oneline --no-decorate 2>/dev/null | head -50)
           else
             NOTES=$(git log --oneline --no-decorate 2>/dev/null | head -50)
           fi
 
-          # 创建 Release
           gh release create "$VERSION" \
             --title "sage-wiki-plus $VERSION" \
-            --notes "## 自动发布
+            --notes "## Auto Release
 
-### 变更
+### Changes
 $NOTES
 
 ---
-自动编译于 $(date '+%Y-%m-%d %H:%M:%S %Z')" \
+Built at $(date '+%Y-%m-%d %H:%M:%S %Z')" \
             "sage-wiki-plus-${VERSION}.tar.gz" \
             sage-wiki-plus
-
-          echo "Release $VERSION created"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
