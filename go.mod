@@ -1,6 +1,6 @@
 module github.com/Black0Bag/sage-wiki-plus
 
-go 1.23
+go 1.25
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
