@@ -26,15 +26,20 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          BINARY="sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}"
-          go build -tags webui -o "$BINARY" ./cmd/sage-wiki
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-          ls -lh "$BINARY"
-        id: build
+          go build -tags webui -o sage-wiki-plus ./cmd/sage-wiki
+          ls -lh sage-wiki-plus
+      - name: Package
+        run: |
+          VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          PKG="sage-wiki-plus_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          tar czf "$PKG" sage-wiki-plus
+          echo "pkg=$PKG" >> $GITHUB_OUTPUT
+          ls -lh "$PKG"
+        id: pkg
       - uses: actions/upload-artifact@v4
         with:
-          name: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: sage-wiki-plus_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: sage-wiki-plus_*.tar.gz
 
   release:
     needs: build
@@ -45,24 +50,31 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          pattern: sage-wiki-plus-*
+          pattern: sage-wiki-plus_*
           merge-multiple: true
-      - name: Checksums
+      - name: Generate release assets
         run: |
-          sha256sum sage-wiki-plus-* > checksums.txt
-          cat checksums.txt
+          sha256sum sage-wiki-plus_*.tar.gz > checksums.txt
+          {
+            echo "## sage-wiki-plus $(git rev-parse --short HEAD)"
+            echo ""
+            echo "### Downloads"
+            for f in sage-wiki-plus_*.tar.gz; do
+              echo "- \`$f\`"
+            done
+            echo ""
+            echo "### Checksums"
+            echo '```'
+            cat checksums.txt
+            echo '```'
+          } > release-notes.md
+          cat release-notes.md
       - name: Create Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          LAST_TAG=$(git tag --sort=-v:refname | head -1 || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            NEW_COUNT=$(git log "$LAST_TAG"..HEAD --oneline 2>/dev/null | wc -l)
-            echo "Changes: $NEW_COUNT"
-            if [ "$NEW_COUNT" -eq 0 ]; then exit 0; fi
-          fi
           VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
           gh release create "$VERSION" \
             --title "sage-wiki-plus $VERSION" \
-            --notes "Multi-arch build: linux/amd64, linux/arm64, linux/386, linux/riscv64" \
-            sage-wiki-plus-* checksums.txt
+            --notes-file release-notes.md \
+            sage-wiki-plus_*.tar.gz checksums.txt
