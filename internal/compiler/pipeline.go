@@ -603,7 +603,7 @@ func submitBatch(
 		requests = append(requests, llm.BatchRequest{
 			CustomID: customID,
 			Messages: []llm.Message{
-				{Role: "system", Content: "You are a research assistant creating structured summaries for a personal knowledge wiki."},
+				{Role: "system", Content: "你是一个研究助手，为个人知识库创建结构化的摘要内容。"},
 				{Role: "user", Content: prompt + "\n\n---\n\nSource content:\n\n" + content.Text},
 			},
 			Opts: llm.CallOpts{Model: model, MaxTokens: maxTokens},

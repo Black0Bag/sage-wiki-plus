@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -27,14 +28,12 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
-		// Merge updates into config
 		cfgPath := filepath.Join(s.projectDir, "config.yaml")
 		newCfg, err := config.Load(cfgPath)
 		if err != nil {
 			http.Error(w, "config load error", http.StatusInternalServerError)
 			return
 		}
-		// Apply simple field overrides (expand as needed)
 		if v, ok := updates["llm_model"]; ok {
 			if s, ok := v.(string); ok {
 				newCfg.LLM.Model = s
@@ -55,7 +54,11 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 				newCfg.Output = s
 			}
 		}
-		// Save
+		if v, ok := updates["language"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.Language = s
+			}
+		}
 		if err := newCfg.Save(cfgPath); err != nil {
 			http.Error(w, "config save error", http.StatusInternalServerError)
 			return
@@ -75,7 +78,6 @@ func (s *WebServer) handleSourceUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Limit to 50MB
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
 
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
@@ -95,7 +97,6 @@ func (s *WebServer) handleSourceUpload(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(rawDir, header.Filename)
 
-	// Path traversal check
 	absDest, _ := filepath.Abs(destPath)
 	absRaw, _ := filepath.Abs(rawDir)
 	if !strings.HasPrefix(absDest, absRaw) {
@@ -118,13 +119,12 @@ func (s *WebServer) handleSourceUpload(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("source uploaded", "name", header.Filename, "size", written)
 
-	// Auto-compile hint
 	writeJSON(w, map[string]any{
 		"status":   "ok",
 		"filename": header.Filename,
 		"size":     written,
 		"path":     destPath,
-		"message":  "File saved. Run /api/compile to compile.",
+		"message":  "文件已保存，可通过 /api/compile 触发编译",
 	})
 }
 
@@ -157,7 +157,6 @@ func (s *WebServer) handleSourceList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Sort by name
 	sort.Slice(sources, func(i, j int) bool {
 		return sources[i].Name < sources[j].Name
 	})
@@ -173,7 +172,6 @@ func (s *WebServer) handleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run compile in background
 	go func() {
 		cmd := exec.Command("sage-wiki", "compile", "--dir", s.projectDir)
 		cmd.Dir = s.projectDir
@@ -183,17 +181,15 @@ func (s *WebServer) handleCompile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Info("compile completed", "output", string(out))
-		// Notify WebSocket clients
 		s.BroadcastReload()
 	}()
 
-	writeJSON(w, map[string]any{"status": "started", "message": "Compilation started in background"})
+	writeJSON(w, map[string]any{"status": "started", "message": "编译已后台启动"})
 }
 
 // ---------- 模型发现 ----------
 
 func (s *WebServer) handleModels(w http.ResponseWriter, r *http.Request) {
-	// Return configured models + try to auto-discover from common providers
 	models := map[string]any{
 		"configured": map[string]string{
 			"llm":       s.cfg.LLM.Model,
@@ -202,7 +198,6 @@ func (s *WebServer) handleModels(w http.ResponseWriter, r *http.Request) {
 		"providers": []map[string]any{},
 	}
 
-	// Try OpenAI-compatible endpoint for model list
 	if s.cfg.LLM.APIBase != "" {
 		models["llm_api_base"] = s.cfg.LLM.APIBase
 	}
@@ -232,7 +227,6 @@ func (s *WebServer) handleArticleWrite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Ensure .md extension
 		if !strings.HasSuffix(body.Path, ".md") {
 			body.Path += ".md"
 		}
@@ -300,15 +294,163 @@ func (s *WebServer) handleManifest(w http.ResponseWriter, r *http.Request) {
 // ---------- 健康检查 ----------
 
 func (s *WebServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Simple health check: ping DB
 	_, err := s.db.ReadDB().Exec("SELECT 1")
 	healthy := err == nil
 	writeJSON(w, map[string]any{
 		"status":    map[bool]string{true: "healthy", false: "unhealthy"}[healthy],
 		"project":   s.cfg.Project,
 		"version":   "sage-wiki-plus",
+		"language":  s.cfg.Language,
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }
 
+// ---------- 📱 分享 API (Android 分享/Chrome 扩展) ----------
 
+// handleShare 接收外部分享内容并保存到 raw/ 目录。
+// 适用于: Android Intent.ACTION_SEND、Chrome Extension 的页面内容捕获。
+// POST /api/share
+// Content-Type: application/json
+// {"title": "...", "text": "...", "url": "...", "source": "android|chrome"}
+func (s *WebServer) handleShare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Title  string `json:"title"`
+		Text   string `json:"text"`
+		URL    string `json:"url"`
+		Source string `json:"source"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if body.Title == "" && body.Text == "" && body.URL == "" {
+		http.Error(w, "至少需要 title、text 或 url", http.StatusBadRequest)
+		return
+	}
+
+	// 生成文件名: 时间戳 + 标题
+	ts := time.Now().Format("20060102_150405")
+	safeName := strings.ReplaceAll(body.Title, " ", "_")
+	if safeName == "" {
+		safeName = "shared"
+	}
+	if len(safeName) > 50 {
+		safeName = safeName[:50]
+	}
+	filename := fmt.Sprintf("share_%s_%s.md", ts, safeName)
+
+	// 构建 Markdown 内容
+	var md strings.Builder
+	md.WriteString(fmt.Sprintf("# %s\n\n", body.Title))
+	if body.URL != "" {
+		md.WriteString(fmt.Sprintf("> 来源: %s\n\n", body.URL))
+	}
+	md.WriteString(fmt.Sprintf("> 分享自: %s\n\n", map[bool]string{true: body.Source, false: "外部应用"}[body.Source != ""]))
+	md.WriteString("---\n\n")
+	md.WriteString(body.Text)
+	md.WriteString("\n")
+
+	rawDir := filepath.Join(s.projectDir, "raw")
+	os.MkdirAll(rawDir, 0755)
+
+	destPath := filepath.Join(rawDir, filename)
+	if err := os.WriteFile(destPath, []byte(md.String()), 0644); err != nil {
+		http.Error(w, "save error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("content shared", "source", body.Source, "title", body.Title, "file", filename)
+
+	writeJSON(w, map[string]any{
+		"status":   "ok",
+		"filename": filename,
+		"path":     destPath,
+		"message":  "内容已保存到 raw/，可通过 /api/compile 触发编译",
+	})
+}
+
+// handleShareBookmarklet 返回一个 bookmarklet 代码片段，
+// 用户可拖到浏览器书签栏，点击后捕获当前页面内容分享到 sage-wiki。
+// GET /api/share/bookmarklet
+func (s *WebServer) handleShareBookmarklet(w http.ResponseWriter, r *http.Request) {
+	// 获取本机地址
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+
+	jsCode := fmt.Sprintf(`javascript:(function(){
+  var t=document.title||"未命名页面";
+  var u=location.href;
+  var s=getSelection()?getSelection().toString():"";
+  var b=document.body?document.body.innerText.substring(0,5000):"";
+  var text=s||b;
+  fetch("%s/api/share",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({title:t,text:text,url:u,source:"chrome"})
+  }).then(function(r){return r.json()}).then(function(j){
+    alert("已分享到 sage-wiki: "+j.filename);
+  }).catch(function(e){
+    alert("分享失败: "+e);
+  });
+})();`, baseURL)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><body>
+<h2>📌 sage-wiki-plus Bookmarklet</h2>
+<p>将下面的链接拖到浏览器书签栏，浏览任意页面时点击即可分享内容到 sage-wiki：</p>
+<p><a href="%s" onclick="return false;">📚 分享到 sage-wiki</a></p>
+<p>或者手动复制这段代码创建书签：</p>
+<pre style="background:#f5f5f5;padding:10px;word-break:break-all;font-size:12px;">%s</pre>
+</body></html>`, jsCode, jsCode)
+}
+
+// handleSharePreset 返回 Android Intent 配置说明。
+// GET /api/share/preset
+func (s *WebServer) handleSharePreset(w http.ResponseWriter, r *http.Request) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><body>
+<h2>📱 sage-wiki-plus 分享配置</h2>
+
+<h3>Android 分享目标</h3>
+<p>使用 HTTP POST 将内容发送到：</p>
+<pre>POST %s/api/share
+Content-Type: application/json
+
+{"title":"...", "text":"...", "url":"...", "source":"android"}</pre>
+
+<h3>Chrome 扩展建议</h3>
+<p>使用上述 bookmarklet，或创建一个简单的 Chrome Extension 调用：</p>
+<pre>fetch("%s/api/share", {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({
+    title: document.title,
+    text: window.getSelection().toString(),
+    url: location.href,
+    source: "chrome"
+  })
+})</pre>
+
+<h3>快捷方式 (Android)</h3>
+<p>在手机浏览器中保存以下链接到桌面：</p>
+<pre>%s/api/share/bookmarklet</pre>
+</body></html>`, baseURL, baseURL, baseURL)
+}

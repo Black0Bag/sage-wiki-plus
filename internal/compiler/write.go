@@ -170,7 +170,7 @@ func writeOneArticle(opts ArticleWriteOpts, concept ExtractedConcept, aliasMap m
 	}
 
 	resp, err := opts.Client.ChatCompletion([]llm.Message{
-		{Role: "system", Content: "You are a wiki author writing comprehensive, precise articles for a personal knowledge base. Use [[wikilinks]] for cross-references. Do not include YAML frontmatter."},
+		{Role: "system", Content: "你是一个维基作者，为个人知识库撰写全面、精确的文章。使用 [[wikilinks]] 标记交叉引用。不要包含 YAML 前置元数据。"},
 		{Role: "user", Content: prompt},
 	}, llm.CallOpts{Model: opts.Model, MaxTokens: opts.MaxTokens})
 	if err != nil {

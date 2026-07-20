@@ -233,7 +233,7 @@ func summarizeOne(
 		}
 
 		resp, err := client.ChatCompletion([]llm.Message{
-			{Role: "system", Content: "You are a research assistant creating structured summaries for a personal knowledge wiki."},
+			{Role: "system", Content: "你是一个研究助手，为个人知识库创建结构化的摘要内容。"},
 			{Role: "user", Content: prompt + "\n\n---\n\nSource content:\n\n" + content.Text},
 		}, llm.CallOpts{Model: model, MaxTokens: maxTokens})
 		if err != nil {
@@ -336,10 +336,10 @@ func summarizeImage(projectDir string, info SourceInfo, client *llm.Client, mode
 	mimeType := detectImageMime(info.Path)
 	b64 := base64.StdEncoding.EncodeToString(imgData)
 
-	prompt := fmt.Sprintf("Describe this image from a knowledge base.\nSource: %s\n\nProvide:\n1. A brief caption\n2. What the image depicts (diagram, chart, photo, screenshot, etc.)\n3. Key information conveyed\n4. Any text visible in the image\n5. Concepts this relates to", info.Path)
+	prompt := fmt.Sprintf("请描述来自知识库的图片。\n来源: %s\n\n请提供:\n1. 简短标题\n2. 图片内容描述（图表、流程图、照片、截图等）\n3. 传达的关键信息\n4. 图片中可见的文本\n5. 相关的概念", info.Path)
 
 	resp, err := client.ChatCompletionWithImage([]llm.Message{
-		{Role: "system", Content: "You are a research assistant describing images for a personal knowledge wiki."},
+		{Role: "system", Content: "你是一个研究助手，为个人知识库中的图片描述内容。"},
 	}, prompt, b64, mimeType, llm.CallOpts{Model: model, MaxTokens: maxTokens})
 	if err != nil {
 		return "", fmt.Errorf("vision LLM: %w", err)
@@ -420,7 +420,7 @@ func summarizeChunks(
 
 		log.Debug("summarizing group", "source", info.Path, "group", fmt.Sprintf("%d/%d", gi+1, len(groups)), "chunks_in_group", len(group), "budget", perGroupBudget)
 		resp, err := client.ChatCompletion([]llm.Message{
-			{Role: "system", Content: "You are summarizing a section of a larger document."},
+			{Role: "system", Content: "你在为一个较大文档的某个部分撰写摘要。"},
 			{Role: "user", Content: prompt + "\n\n---\n\nSection:\n\n" + groupText.String()},
 		}, llm.CallOpts{Model: model, MaxTokens: perGroupBudget})
 		if err != nil {
@@ -507,7 +507,7 @@ func synthesizeHierarchical(summaries []string, sourcePath string, client *llm.C
 			synthesisPrompt += prompts.LanguageInstruction(language)
 
 			resp, err := client.ChatCompletion([]llm.Message{
-				{Role: "system", Content: "You are synthesizing partial summaries into a final summary."},
+				{Role: "system", Content: "你在将多个部分摘要合并成一份完整的最终摘要。"},
 				{Role: "user", Content: synthesisPrompt},
 			}, llm.CallOpts{Model: model, MaxTokens: maxTokens})
 			if err != nil {

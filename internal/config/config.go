@@ -20,7 +20,7 @@ type Config struct {
 	Version     int            `yaml:"version"`
 	Project     string         `yaml:"project"`
 	Description string         `yaml:"description"`
-	Language    string         `yaml:"language,omitempty"`
+	Language    string         `yaml:"language"`
 	Vault       *VaultConfig   `yaml:"vault,omitempty"`
 	Sources     []Source       `yaml:"sources"`
 	Output      string         `yaml:"output"`
@@ -498,9 +498,10 @@ func (t TrustConfig) SimilarityThresholdOrDefault() float64 {
 // Defaults returns a Config with sensible defaults for greenfield mode.
 func Defaults() Config {
 	return Config{
-		Version: 1,
-		Output:  "wiki",
-		Sources: []Source{{Path: "raw", Type: "auto", Watch: true}},
+		Version:  1,
+		Language: "Chinese",
+		Output:   "wiki",
+		Sources:  []Source{{Path: "raw", Type: "auto", Watch: true}},
 		Compiler: CompilerConfig{
 			MaxParallel:      20,
 			DebounceSeconds:  2,

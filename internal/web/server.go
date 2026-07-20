@@ -97,6 +97,9 @@ func (s *WebServer) Handler() http.Handler {
 	mux.HandleFunc("/api/article", s.handleArticleWrite)
 	mux.HandleFunc("/api/manifest", s.handleManifest)
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/share", s.handleShare)
+	mux.HandleFunc("/api/share/bookmarklet", s.handleShareBookmarklet)
+	mux.HandleFunc("/api/share/preset", s.handleSharePreset)
 
 	// Static files + SPA fallback
 	handler := defaultStaticHandler(s.projectDir)
