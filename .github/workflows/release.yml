@@ -21,17 +21,17 @@ jobs:
           go-version: '1.25'
       - name: Tidy
         run: go mod tidy
-      - name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           BINARY="sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}"
           go build -tags webui -o "$BINARY" ./cmd/sage-wiki
-          echo "BINARY=$BINARY" >> $GITHUB_ENV
+          echo "binary=$BINARY" >> $GITHUB_OUTPUT
           ls -lh "$BINARY"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        id: build
+      - uses: actions/upload-artifact@v4
         with:
           name: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
           path: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -46,14 +46,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: sage-wiki-plus-*
-          merge-multiple: false
-      - name: Calculate checksums
+          merge-multiple: true
+      - name: Checksums
         run: |
-          ls -la
-          echo "=== SHA256 Checksums ===" > checksums.txt
-          for f in sage-wiki-plus-*/*; do
-            sha256sum "$f" >> checksums.txt
-          done
+          sha256sum sage-wiki-plus-* > checksums.txt
           cat checksums.txt
       - name: Create Release
         env:
@@ -64,34 +60,9 @@ jobs:
             NEW_COUNT=$(git log "$LAST_TAG"..HEAD --oneline 2>/dev/null | wc -l)
             echo "Changes: $NEW_COUNT"
             if [ "$NEW_COUNT" -eq 0 ]; then exit 0; fi
-            NOTES=$(git log "$LAST_TAG"..HEAD --oneline --no-decorate 2>/dev/null | head -50)
-          else
-            echo "No previous tag"
-            NOTES=$(git log --oneline --no-decorate 2>/dev/null | head -50)
           fi
           VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
-
-          ARGS=()
-          ARGS+=("$VERSION")
-          ARGS+=(--title "sage-wiki-plus $VERSION")
-          ARGS+=(--notes "## sage-wiki-plus $VERSION
-
-### Builds
-$(for f in sage-wiki-plus-*/*; do
-  ARCH=$(basename "$f" | sed 's/sage-wiki-plus-//')
-  echo "- \`$ARCH\`"
-done)
-
-### Checksums
-\`\`\`
-$(cat checksums.txt)
-\`\`\`
-
-### Changes
-$NOTES
-")
-          for f in sage-wiki-plus-*/* checksums.txt; do
-            ARGS+=("$f")
-          done
-
-          gh release create "${ARGS[@]}"
+          gh release create "$VERSION" \
+            --title "sage-wiki-plus $VERSION" \
+            --notes "Multi-arch build: linux/amd64, linux/arm64, linux/386, linux/riscv64" \
+            sage-wiki-plus-* checksums.txt
