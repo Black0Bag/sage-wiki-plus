@@ -7,6 +7,10 @@ permissions:
   contents: write
 jobs:
   build:
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64, 386, riscv64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +21,41 @@ jobs:
           go-version: '1.25'
       - name: Tidy
         run: go mod tidy
-      - name: Build
-        run: go build -tags webui -o sage-wiki-plus ./cmd/sage-wiki
-      - name: Release
+      - name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          BINARY="sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}"
+          go build -tags webui -o "$BINARY" ./cmd/sage-wiki
+          echo "BINARY=$BINARY" >> $GITHUB_ENV
+          ls -lh "$BINARY"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: sage-wiki-plus-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sage-wiki-plus-*
+          merge-multiple: false
+      - name: Calculate checksums
+        run: |
+          ls -la
+          echo "=== SHA256 Checksums ===" > checksums.txt
+          for f in sage-wiki-plus-*/*; do
+            sha256sum "$f" >> checksums.txt
+          done
+          cat checksums.txt
+      - name: Create Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -34,7 +70,28 @@ jobs:
             NOTES=$(git log --oneline --no-decorate 2>/dev/null | head -50)
           fi
           VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
-          gh release create "$VERSION" \
-            --title "sage-wiki-plus $VERSION" \
-            --notes "Auto build $VERSION" \
-            sage-wiki-plus
+
+          ARGS=()
+          ARGS+=("$VERSION")
+          ARGS+=(--title "sage-wiki-plus $VERSION")
+          ARGS+=(--notes "## sage-wiki-plus $VERSION
+
+### Builds
+$(for f in sage-wiki-plus-*/*; do
+  ARCH=$(basename "$f" | sed 's/sage-wiki-plus-//')
+  echo "- \`$ARCH\`"
+done)
+
+### Checksums
+\`\`\`
+$(cat checksums.txt)
+\`\`\`
+
+### Changes
+$NOTES
+")
+          for f in sage-wiki-plus-*/* checksums.txt; do
+            ARGS+=("$f")
+          done
+
+          gh release create "${ARGS[@]}"
