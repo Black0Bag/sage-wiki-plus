@@ -1,541 +1,307 @@
-// sage-wiki-plus SPA - Mobile-first Knowledge Base UI
-(function() {
-  'use strict';
+// ===== Sage Wiki Plus — SPA Frontend =====
+'use strict';
 
-  const BASE = '';
-  let config = {};
+const $ = (s) => document.querySelector(s);
+const app = $('#app');
+const toast = $('#toast');
 
-  // ==== Toast notifications ====
-  function toast(msg, duration) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => el.classList.remove('show'), duration || 2500);
+let currentPage = 'dashboard';
+let articleCache = {};
+
+// ---- Utils ----
+async function api(path, opts) {
+  opts = opts || {};
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+  const ct = r.headers.get('content-type') || '';
+  return ct.indexOf('json') >= 0 ? r.json() : r.text();
+}
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(function() { toast.classList.remove('show'); }, 2500);
+}
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
+}
+// Minimal Markdown renderer
+function md2html(md) {
+  var h = escapeHtml(md);
+  h = h.replace(/```([\s\S]*?)```/g, function(m, c) { return '<pre>' + c + '</pre>'; });
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // table rows
+  h = h.replace(/^\|(.+)\|$/gm, function(m, row) {
+    var cells = row.split('|').map(function(c){return c.trim();}).filter(function(c){return c.length>0;});
+    if (cells.every(function(c){return /^-+$/.test(c);})) return '';
+    return '<tr>' + cells.map(function(c){return '<td>'+c+'</td>';}).join('') + '</tr>';
+  });
+  h = h.replace(/(<tr>[\s\S]*?<\/tr>\s*)+/g, function(m) { return '<table>' + m + '</table>'; });
+  h = h.replace(/^\- (.+)$/gm, '<li>$1</li>');
+  h = h.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+  h = h.replace(/<\/ul>\s*<ul>/g, '');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  h = h.replace(/\n{2,}/g, '</p><p>');
+  h = '<p>' + h + '</p>';
+  h = h.replace(/<p>\s*<(h[123]|pre|table|ul)/g, '<$1');
+  h = h.replace(/<\/(h[123]|pre|table|ul)>\s*<\/p>/g, '</$1>');
+  return h;
+}
+
+// ---- Navigation ----
+document.querySelectorAll('.nav-item').forEach(function(el) {
+  el.addEventListener('click', function() {
+    var page = el.dataset.page;
+    if (page === currentPage) return;
+    document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+    el.classList.add('active');
+    currentPage = page;
+    renderPage(page);
+  });
+});
+
+function renderPage(page) {
+  switch (page) {
+    case 'dashboard': renderDashboard(); break;
+    case 'articles': renderArticles(); break;
+    case 'search': renderSearch(); break;
+    case 'upload': renderUpload(); break;
+    case 'settings': renderSettings(); break;
   }
+}
 
-  // ==== API helpers ====
-  async function api(path, opts = {}) {
-    try {
-      const res = await fetch(BASE + path, {
-        headers: { 'Content-Type': 'application/json', ...opts.headers },
-        ...opts
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      const ct = res.headers.get('content-type') || '';
-      if (ct.includes('application/json')) return res.json();
-      return res.text();
-    } catch (e) {
-      toast('API 错误: ' + e.message);
-      throw e;
+// ---- Dashboard ----
+async function renderDashboard() {
+  app.innerHTML =
+    '<div class="topbar"><h1>📊 仪表盘</h1><div class="sub">Sage Wiki Plus 知识库概览</div></div>' +
+    '<div class="card"><div class="stats" id="stats"><div class="loading">加载中...</div></div></div>' +
+    '<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:10px">📚 源文件</div><div id="sources"><div class="loading">加载中...</div></div></div>' +
+    '<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:10px">⚙️ 快捷操作</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn outline" style="width:auto;flex:1;min-width:120px" onclick="doCompile()">🚀 编译Wiki</button>' +
+    '<button class="btn outline" style="width:auto;flex:1;min-width:120px" onclick="document.querySelector(\\'.nav-item[data-page=articles]\\').click()">📖 浏览文章</button>' +
+    '</div></div>';
+  try {
+    var results = await Promise.all([api('/api/status'), api('/api/sources')]);
+    var status = results[0], sources = results[1];
+    var statsEl = $('#stats');
+    if (statsEl) {
+      statsEl.innerHTML =
+        '<div class="stat-item"><div class="val">' + (status.entries || 0) + '</div><div class="lbl">索引条目</div></div>' +
+        '<div class="stat-item"><div class="val">' + (status.entities || 0) + '</div><div class="lbl">实体</div></div>' +
+        '<div class="stat-item"><div class="val">' + (status.vectors || 0) + '</div><div class="lbl">向量</div></div>' +
+        '<div class="stat-item"><div class="val">' + (status.relations || 0) + '</div><div class="lbl">关系</div></div>';
     }
-  }
-
-  // ==== Navigation / Router ====
-  let currentRoute = 'dashboard';
-
-  function navigateTo(hash) {
-    const route = hash.replace('#/', '').replace('#', '') || 'dashboard';
-    switchRoute(route);
-  }
-
-  function switchRoute(route) {
-    currentRoute = route;
-    // Update page visibility
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const page = document.getElementById('page-' + route);
-    if (page) page.classList.add('active');
-
-    // Update nav title
-    const titles = { dashboard:'📊 仪表盘', articles:'📖 文章', search:'🔍 搜索', graph:'🔗 图谱',
-      sources:'📤 源文件', editor:'✏️ 编辑', settings:'⚙️ 设置', about:'ℹ️ 关于' };
-    document.getElementById('navTitle').textContent = titles[route] || 'sage-wiki+';
-
-    // Update sidebar active
-    document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('active'));
-    const active = document.querySelector(`.menu-item[data-route="${route}"]`);
-    if (active) active.classList.add('active');
-
-    // Close sidebar on mobile
-    closeSidebar();
-
-    // Route-specific loaders
-    if (route === 'dashboard') loadDashboard();
-    else if (route === 'articles') loadArticleTree();
-    else if (route === 'sources') loadSourceList();
-    else if (route === 'settings') loadConfig();
-    else if (route === 'graph') initGraph();
-    else if (route === 'about') loadAbout();
-  }
-
-  // ==== Sidebar ====
-  function openSidebar() { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebarOverlay').classList.add('show'); }
-  function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('show'); }
-
-  // ==== Dashboard ====
-  async function loadDashboard() {
-    try {
-      const status = await api('/api/status');
-      document.getElementById('statEntries').textContent = status.entries ?? '-';
-      document.getElementById('statVectors').textContent = status.vectors ?? '-';
-      document.getElementById('statEntities').textContent = status.entities ?? '-';
-      document.getElementById('statRelations').textContent = status.relations ?? '-';
-      document.getElementById('dashboardProject').innerHTML = `<strong>项目：</strong>${status.project || '未设置'}`;
-    } catch (e) { /* toast already shown */ }
-
-    try {
-      const tree = await api('/api/tree');
-      document.getElementById('statConcepts').textContent = tree.stats?.concepts ?? '-';
-    } catch (e) {}
-
-    try {
-      const src = await api('/api/sources');
-      document.getElementById('statSources').textContent = src.total ?? '-';
-    } catch (e) {}
-  }
-
-  // ==== Article Tree ====
-  async function loadArticleTree() {
-    const container = document.getElementById('articleTree');
-    try {
-      const tree = await api('/api/tree');
-      let html = '';
-      if (tree.concepts?.length) {
-        html += `<div class="tree-section"><h3>📝 概念文章 (${tree.concepts.length})</h3>`;
-        tree.concepts.forEach(f => {
-          html += `<div class="tree-item" onclick="viewArticle('${f.path}')">📄 ${f.name} <span class="path">${f.path}</span></div>`;
-        });
-        html += '</div>';
-      }
-      if (tree.summaries?.length) {
-        html += `<div class="tree-section"><h3>📋 摘要 (${tree.summaries.length})</h3>`;
-        tree.summaries.forEach(f => {
-          html += `<div class="tree-item" onclick="viewArticle('${f.path}')">📄 ${f.name} <span class="path">${f.path}</span></div>`;
-        });
-        html += '</div>';
-      }
-      if (!html) html = '<p class="hint">暂无文章，请先上传源文件并编译</p>';
-      container.innerHTML = html;
-    } catch (e) {
-      container.innerHTML = '<p class="hint">无法加载文章列表</p>';
+    var srcs = sources.sources || [];
+    var sEl = $('#sources');
+    if (sEl) {
+      sEl.innerHTML = srcs.length ? srcs.map(function(s) {
+        return '<div class="source-item"><span class="name">' + escapeHtml(s.name) + '</span><span class="size">' + fmtSize(s.size) + '</span></div>';
+      }).join('') : '<div style="color:var(--dim);font-size:13px">暂无源文件</div>';
     }
+  } catch (e) {
+    var st = $('#stats');
+    if (st) st.innerHTML = '<div style="color:#ff5c6c">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
+}
 
-  // ==== Article Viewer ====
-  window.viewArticle = async function(path) {
-    const viewer = document.getElementById('articleViewer');
-    viewer.classList.remove('hidden');
-    viewer.innerHTML = '<p>加载中...</p>';
-    try {
-      const data = await api('/api/articles/' + path);
-      let html = '';
-      if (data.frontmatter) {
-        html += '<div class="article-meta"><small>';
-        for (const [k,v] of Object.entries(data.frontmatter)) {
-          html += `<strong>${k}:</strong> ${v} `;
-        }
-        html += '</small></div>';
-      }
-      // Simple markdown rendering (basic)
-      let body = data.body || '';
-      body = body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      // Headers
-      body = body.replace(/^### (.+)$/gm, '<h4>$1</h4>');
-      body = body.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-      body = body.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-      // Bold/italic
-      body = body.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      body = body.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      // Code blocks
-      body = body.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-      // Inline code
-      body = body.replace(/`(.+?)`/g, '<code>$1</code>');
-      // Links
-      body = body.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank">$1</a>');
-      // Lists
-      body = body.replace(/^- (.+)$/gm, '<li>$1</li>');
+// ---- Articles ----
+async function renderArticles() {
+  app.innerHTML =
+    '<div class="topbar"><h1>📖 文章</h1><div class="sub">浏览 Wiki 概念和摘要</div></div>' +
+    '<div class="article-tab" id="tabs"><button class="active" data-tab="concepts">概念</button><button data-tab="summaries">摘要</button></div>' +
+    '<div id="articleList"><div class="loading">加载中...</div></div>';
+  document.querySelectorAll('#tabs button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('#tabs button').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      loadArticleList(btn.dataset.tab);
+    });
+  });
+  try {
+    var tree = await api('/api/tree');
+    window._treeData = tree;
+    loadArticleList('concepts', tree);
+  } catch (e) {
+    var el = $('#articleList');
+    if (el) el.innerHTML = '<div style="color:#ff5c6c">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
 
-      html += '<pre style="white-space:pre-wrap;word-break:break-word">' + body + '</pre>';
-      viewer.innerHTML = html;
-    } catch (e) {
-      viewer.innerHTML = '<p class="hint">无法加载文章</p>';
-    }
-  };
+function loadArticleList(tab, data) {
+  if (!data) data = window._treeData;
+  if (!data) return;
+  var items = data[tab] || [];
+  var el = $('#articleList');
+  if (!el) return;
+  el.innerHTML = items.length ? items.map(function(item) {
+    return '<div class="article-list-item" onclick="viewArticle(\'' + escapeHtml(item.path) + '\',\'' + escapeHtml(item.name) + '\')"><div class="name">' + escapeHtml(item.name) + '</div></div>';
+  }).join('') : '<div style="padding:20px;text-align:center;color:var(--dim)">暂无内容</div>';
+}
 
-  // ==== Search ====
-  window.doSearch = async function() {
-    const q = document.getElementById('searchInput').value.trim();
-    if (!q) return;
-    const container = document.getElementById('searchResults');
-    container.innerHTML = '<p>搜索中...</p>';
-    try {
-      const data = await api('/api/search?q=' + encodeURIComponent(q) + '&limit=20');
-      if (!data.results?.length) {
-        container.innerHTML = '<p class="hint">未找到结果</p>';
-        return;
-      }
-      let html = `<p>找到 ${data.total} 个结果：</p>`;
-      data.results.forEach(r => {
-        html += `<div class="search-result" onclick="viewArticle('${r.path}')">
-          <h4>📄 ${r.path}</h4>
-          <div class="snippet">${escapeHtml(r.snippet)}</div>
-          <div class="score">得分: ${r.score?.toFixed(3)}</div>
-        </div>`;
-      });
-      container.innerHTML = html;
-    } catch (e) {
-      container.innerHTML = '<p class="hint">搜索失败</p>';
-    }
-  };
-
-  // ==== Graph ====
-  let graphData = null;
-  async function initGraph() {
-    const canvas = document.getElementById('graphCanvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const rect = canvas.parentElement.getBoundingClientRect();
-    canvas.width = rect.width * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-    if (!graphData) {
-      try {
-        graphData = await api('/api/graph');
-      } catch (e) { return; }
-    }
-
-    if (!graphData.nodes?.length) {
-      ctx.fillStyle = '#a0a0b0';
-      ctx.font = '14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('暂无图谱数据，请先编译', rect.width/2, rect.height/2);
+async function viewArticle(path, name) {
+  app.innerHTML =
+    '<div class="topbar"><h1>📖 ' + escapeHtml(name) + '</h1><div class="sub">' + escapeHtml(path) + '</div></div>' +
+    '<div class="article-view"><span class="back" onclick="renderArticles()">← 返回列表</span><div class="article-content" id="articleContent"><div class="loading">加载中...</div></div></div>';
+  try {
+    if (articleCache[path]) {
+      var el1 = $('#articleContent');
+      if (el1) el1.innerHTML = md2html(articleCache[path]);
       return;
     }
+    var content = await api('/api/articles/' + encodeURIComponent(path));
+    articleCache[path] = content;
+    var el2 = $('#articleContent');
+    if (el2) el2.innerHTML = md2html(content);
+  } catch (e) {
+    var el3 = $('#articleContent');
+    if (el3) el3.innerHTML = '<div style="color:#ff5c6c">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
 
-    // Simple force-directed layout
-    const nodes = graphData.nodes.map((n, i) => ({
-      ...n, x: 50 + Math.random() * (rect.width - 100), y: 50 + Math.random() * (rect.height - 100),
-      vx: 0, vy: 0, radius: Math.min(30, 8 + (n.connections || 0) * 2)
-    }));
-    const nodeMap = {};
-    nodes.forEach(n => nodeMap[n.id] = n);
+// ---- Search ----
+function renderSearch() {
+  app.innerHTML =
+    '<div class="topbar"><h1>🔍 搜索</h1><div class="sub">混合检索 Wiki 知识</div></div>' +
+    '<div class="search-bar"><input id="searchInput" type="text" placeholder="输入关键词..." /><button onclick="doSearch()">搜索</button></div>' +
+    '<div id="searchResults"></div>';
+  var input = $('#searchInput');
+  if (input) {
+    input.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSearch(); });
+    input.focus();
+  }
+}
 
-    // Edges
-    const edges = (graphData.edges || []).filter(e => nodeMap[e.source] && nodeMap[e.target]);
+async function doSearch() {
+  var q = $('#searchInput') ? $('#searchInput').value.trim() : '';
+  if (!q) return;
+  var el = $('#searchResults');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">搜索中...</div>';
+  try {
+    var data = await api('/api/search?q=' + encodeURIComponent(q));
+    var results = data.results || [];
+    el.innerHTML = results.length ? results.map(function(r) {
+      return '<div class="search-result" onclick="viewArticle(\'' + escapeHtml(r.path) + '\',\'' + escapeHtml(r.id) + '\')">' +
+        '<div class="title">' + escapeHtml(r.id) + '</div>' +
+        '<div class="snippet">' + escapeHtml(r.snippet || '') + '</div>' +
+        '<div class="score">相关度: ' + (r.score * 100).toFixed(1) + '%</div></div>';
+    }).join('') : '<div style="padding:20px;text-align:center;color:var(--dim)">无结果</div>';
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ff5c6c">搜索失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
 
-    // Force simulation (simplified)
-    const W = rect.width, H = rect.height;
-    for (let iter = 0; iter < 100; iter++) {
-      // Repulsion
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i+1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          let dx = b.x - a.x, dy = b.y - a.y;
-          let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-          let force = 500 / (dist * dist);
-          a.vx -= force * dx / dist;
-          a.vy -= force * dy / dist;
-          b.vx += force * dx / dist;
-          b.vy += force * dy / dist;
-        }
-      }
-      // Attraction along edges
-      edges.forEach(e => {
-        const a = nodeMap[e.source], b = nodeMap[e.target];
-        if (!a || !b) return;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-        const force = dist * 0.01;
-        a.vx += force * dx / dist;
-        a.vy += force * dy / dist;
-        b.vx -= force * dx / dist;
-        b.vy -= force * dy / dist;
-      });
-      // Center gravity
-      nodes.forEach(n => {
-        n.vx += (W/2 - n.x) * 0.001;
-        n.vy += (H/2 - n.y) * 0.001;
-        n.vx *= 0.9; n.vy *= 0.9;
-        n.x += n.vx; n.y += n.vy;
-        n.x = Math.max(20, Math.min(W-20, n.x));
-        n.y = Math.max(20, Math.min(H-20, n.y));
-      });
+// ---- Upload ----
+function renderUpload() {
+  app.innerHTML =
+    '<div class="topbar"><h1>📤 上传</h1><div class="sub">添加源文件到 Wiki</div></div>' +
+    '<div class="upload-zone" id="dropZone"><div class="icon">📁</div><div class="text">点击选择或拖放文件到此处<br><strong>支持 .txt .md .pdf .json .go .py 等</strong></div></div>' +
+    '<input type="file" id="fileInput" multiple style="display:none" />' +
+    '<div id="uploadResult"></div>';
+  var dz = $('#dropZone'), fi = $('#fileInput');
+  if (dz && fi) {
+    dz.addEventListener('click', function() { fi.click(); });
+    fi.addEventListener('change', function() { handleFiles(fi.files); });
+    dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; });
+    dz.addEventListener('dragleave', function() { dz.style.borderColor = ''; });
+    dz.addEventListener('drop', function(e) { e.preventDefault(); dz.style.borderColor = ''; handleFiles(e.dataTransfer.files); });
+  }
+}
+
+async function handleFiles(files) {
+  if (!files.length) return;
+  var el = $('#uploadResult');
+  if (el) el.innerHTML = '<div class="card">上传中...</div>';
+  var fd = new FormData();
+  for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
+  try {
+    var r = await fetch('/api/sources/upload', { method: 'POST', body: fd });
+    var result = await r.json().catch(function() { return {}; });
+    if (r.ok) {
+      if (el) el.innerHTML = '<div class="card" style="border-color:var(--accent)">✅ 上传成功！' + escapeHtml(result.message || JSON.stringify(result)) + '</div>';
+      showToast('上传成功');
+    } else {
+      if (el) el.innerHTML = '<div class="card" style="border-color:#ff5c6c">❌ 上传失败: ' + escapeHtml(result.error || r.statusText) + '</div>';
     }
-
-    // Draw
-    ctx.clearRect(0, 0, W, H);
-    ctx.strokeStyle = '#2a2a4a';
-    ctx.lineWidth = 1;
-    edges.forEach(e => {
-      const a = nodeMap[e.source], b = nodeMap[e.target];
-      if (!a || !b) return;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    });
-
-    const typeColors = { concept: '#4f8cff', technique: '#2ecc71', source: '#e74c3c',
-      claim: '#f39c12', artifact: '#9b59b6' };
-    nodes.forEach(n => {
-      ctx.beginPath(); ctx.arc(n.x, n.y, n.radius, 0, Math.PI*2);
-      ctx.fillStyle = typeColors[n.type] || '#666';
-      ctx.fill();
-      ctx.fillStyle = '#e0e0e0';
-      ctx.font = '10px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(n.name?.substring(0, 12) || n.id, n.x, n.y + n.radius + 12);
-    });
+  } catch (e) {
+    if (el) el.innerHTML = '<div class="card" style="border-color:#ff5c6c">❌ 错误: ' + escapeHtml(e.message) + '</div>';
   }
+}
 
-  // ==== Source Upload ====
-  let uploadQueue = [];
+// ---- Settings ----
+async function renderSettings() {
+  app.innerHTML =
+    '<div class="topbar"><h1>⚙️ 设置</h1><div class="sub">配置 LLM 和 Embedding 模型</div></div>' +
+    '<div class="card">' +
+    '<div class="settings-group"><div class="label">LLM 模型</div><input id="cfgLLM" type="text" placeholder="模型名称" /></div>' +
+    '<div class="settings-group"><div class="label">Embedding 模型</div><input id="cfgEmbed" type="text" placeholder="嵌入模型名称" /></div>' +
+    '<div class="settings-group"><div class="label">API Base URL</div><input id="cfgBaseURL" type="text" placeholder="https://..." /></div>' +
+    '<button class="btn" onclick="saveConfig()">💾 保存配置</button></div>' +
+    '<div class="card">' +
+    '<div style="font-size:15px;font-weight:600;margin-bottom:10px">🚀 编译</div>' +
+    '<button class="btn" onclick="doCompile()">▶️ 开始编译</button>' +
+    '<div class="compile-log" id="compileLog" style="display:none"></div></div>';
+  try {
+    var cfg = await api('/api/config');
+    var el1 = $('#cfgLLM'); if (el1) el1.value = (cfg.Models && cfg.Models.Summarize) || '';
+    var el2 = $('#cfgEmbed'); if (el2) el2.value = (cfg.Embed && cfg.Embed.Model) || '';
+    var el3 = $('#cfgBaseURL'); if (el3) el3.value = (cfg.API && cfg.API.BaseURL) || '';
+  } catch (e) {
+    showToast('加载配置失败');
+  }
+}
 
-  document.addEventListener('DOMContentLoaded', () => {
-    const uploadArea = document.getElementById('uploadArea');
-    const fileInput = document.getElementById('fileInput');
-    if (!uploadArea) return;
-
-    uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', (e) => {
-      e.preventDefault(); uploadArea.classList.remove('dragover');
-      if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+async function saveConfig() {
+  var body = {
+    llm_model: $('#cfgLLM') ? $('#cfgLLM').value : '',
+    embedding_model: $('#cfgEmbed') ? $('#cfgEmbed').value : '',
+    api_base_url: $('#cfgBaseURL') ? $('#cfgBaseURL').value : ''
+  };
+  try {
+    await api('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length) uploadFiles(fileInput.files);
-      fileInput.value = '';
-    });
-  });
-
-  async function uploadFiles(files) {
-    const progress = document.getElementById('uploadProgress');
-    progress.classList.remove('hidden');
-    progress.innerHTML = '';
-    for (const file of files) {
-      progress.innerHTML += `<p>📤 上传中: ${file.name} (${(file.size/1024).toFixed(1)}KB)...</p>`;
-      const formData = new FormData();
-      formData.append('file', file);
-      try {
-        const res = await fetch(BASE + '/api/sources/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        progress.innerHTML += `<p>✅ ${data.filename} 上传成功</p>`;
-      } catch (e) {
-        progress.innerHTML += `<p>❌ ${file.name} 上传失败</p>`;
-      }
-    }
-    progress.innerHTML += '<p>上传完成！<button onclick="loadSourceList()" class="btn">刷新列表</button></p>';
+    showToast('配置已保存');
+  } catch (e) {
+    showToast('保存失败: ' + e.message);
   }
+}
 
-  // ==== Source List ====
-  window.loadSourceList = async function() {
-    const container = document.getElementById('sourceList');
-    try {
-      const data = await api('/api/sources');
-      if (!data.sources?.length) {
-        container.innerHTML = '<p class="hint">暂无源文件</p>';
-        return;
-      }
-      let html = '';
-      data.sources.forEach(s => {
-        html += `<div class="source-item">
-          <div><div class="name">📄 ${escapeHtml(s.name)}</div>
-          <div class="meta">${(s.size/1024).toFixed(1)}KB · ${s.mod_time?.substring(0,10) || '-'}</div></div>
-        </div>`;
-      });
-      container.innerHTML = html;
-    } catch (e) {
-      container.innerHTML = '<p class="hint">加载失败</p>';
-    }
-  };
-
-  // ==== Compile Trigger ====
-  window.triggerCompile = async function() {
-    try {
-      const data = await api('/api/compile', { method: 'POST' });
-      toast('编译已启动: ' + (data.message || ''));
-    } catch (e) {}
-  };
-
-  // ==== Editor ====
-  window.loadArticle = async function() {
-    const sel = document.getElementById('editorFileSelect');
-    const path = sel.value;
-    if (!path) return;
-    try {
-      const data = await api('/api/articles/' + path);
-      document.getElementById('editorTextarea').value = data.body || '';
-      toast('已加载: ' + path);
-    } catch (e) {
-      toast('加载失败');
-    }
-  };
-
-  window.saveArticle = async function() {
-    const sel = document.getElementById('editorFileSelect');
-    const path = sel.value;
-    const content = document.getElementById('editorTextarea').value;
-    if (!path) { toast('请先选择或输入文章路径'); return; }
-    try {
-      const data = await api('/api/article', {
-        method: 'POST',
-        body: JSON.stringify({ path, content })
-      });
-      toast('已保存: ' + path);
-    } catch (e) {}
-  };
-
-  window.deleteArticle = async function() {
-    const sel = document.getElementById('editorFileSelect');
-    const path = sel.value;
-    if (!path) { toast('请选择文章'); return; }
-    if (!confirm('确定删除 ' + path + '？')) return;
-    try {
-      await api('/api/article?path=' + encodeURIComponent(path), { method: 'DELETE' });
-      toast('已删除: ' + path);
-      sel.value = '';
-      document.getElementById('editorTextarea').value = '';
-    } catch (e) {}
-  };
-
-  async function loadEditorDropdown() {
-    const sel = document.getElementById('editorFileSelect');
-    try {
-      const tree = await api('/api/tree');
-      let html = '<option value="">选择文章...</option>';
-      ['concepts', 'summaries'].forEach(cat => {
-        if (tree[cat]) {
-          tree[cat].forEach(f => {
-            html += `<option value="${f.path}">${f.path}</option>`;
-          });
-        }
-      });
-      sel.innerHTML = html;
-    } catch (e) {}
+async function doCompile() {
+  var logEl = $('#compileLog');
+  if (!logEl) {
+    logEl = document.createElement('div');
+    logEl.id = 'compileLog';
+    logEl.className = 'compile-log';
+    var cards = document.querySelectorAll('.card');
+    if (cards.length > 1) cards[cards.length - 1].appendChild(logEl);
   }
-
-  // ==== Settings ====
-  window.loadConfig = async function() {
-    try {
-      const cfg = await api('/api/config');
-      document.getElementById('cfgProject').value = cfg.project || '';
-      document.getElementById('cfgLLMModel').value = cfg.llm?.model || cfg.llm_model || '';
-      document.getElementById('cfgEmbedModel').value = cfg.embedding?.model || cfg.embedding_model || '';
-      document.getElementById('cfgOutput').value = cfg.output || '';
-      toast('配置已加载');
-    } catch (e) {}
-  };
-
-  window.saveConfig = async function() {
-    const updates = {
-      project: document.getElementById('cfgProject').value,
-      llm_model: document.getElementById('cfgLLMModel').value,
-      embedding_model: document.getElementById('cfgEmbedModel').value,
-      output: document.getElementById('cfgOutput').value
-    };
-    try {
-      await api('/api/config', {
-        method: 'PUT',
-        body: JSON.stringify(updates)
-      });
-      toast('配置已保存');
-    } catch (e) {}
-  };
-
-  window.discoverModels = async function() {
-    const result = document.getElementById('modelDiscoveryResult');
-    result.textContent = '扫描中...';
-    try {
-      const data = await api('/api/models');
-      result.textContent = JSON.stringify(data, null, 2);
-    } catch (e) {
-      result.textContent = '扫描失败';
-    }
-  };
-
-  // ==== About ====
-  async function loadAbout() {
-    try {
-      const health = await api('/api/health');
-      document.getElementById('aboutInfo').innerHTML = `
-        <p><strong>版本：</strong>${health.version || 'sage-wiki-plus'}</p>
-        <p><strong>状态：</strong>${health.status}</p>
-        <p><strong>项目：</strong>${health.project || '-'}</p>
-        <hr style="border-color:var(--border);margin:12px 0" />
-        <p>基于 <a href="https://github.com/xoai/sage-wiki" target="_blank">xoai/sage-wiki</a> 构建</p>
-        <p>源代码: <a href="https://github.com/Black0Bag/sage-wiki-plus" target="_blank">Black0Bag/sage-wiki-plus</a></p>
-      `;
-    } catch (e) {}
+  logEl.style.display = 'block';
+  logEl.textContent = '编译启动中...\n';
+  showToast('编译任务已启动');
+  try {
+    var result = await api('/api/compile', { method: 'POST' });
+    logEl.textContent = '编译完成\n' + JSON.stringify(result, null, 2);
+    showToast('编译完成');
+  } catch (e) {
+    logEl.textContent += '错误: ' + e.message + '\n';
+    showToast('编译失败');
   }
+}
 
-  // ==== Connection Health Check ====
-  async function checkConnection() {
-    try {
-      await api('/api/health');
-      document.getElementById('connStatus').className = 'status-dot connected';
-      document.getElementById('statusText').textContent = '已连接';
-    } catch (e) {
-      document.getElementById('connStatus').className = 'status-dot disconnected';
-      document.getElementById('statusText').textContent = '未连接';
-    }
-  }
-
-  // ==== Theme ====
-  function toggleTheme() {
-    // Simple theme toggle placeholder
-    toast('主题切换功能可在 config.yaml 中自定义');
-  }
-
-  // ==== Helpers ====
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // ==== Init ====
-  document.addEventListener('DOMContentLoaded', () => {
-    // Router
-    window.addEventListener('hashchange', () => navigateTo(location.hash));
-    navigateTo(location.hash || '#/');
-
-    // Sidebar events
-    document.getElementById('menuBtn').addEventListener('click', openSidebar);
-    document.getElementById('closeSidebar').addEventListener('click', closeSidebar);
-
-    // Overlay close
-    const overlay = document.getElementById('sidebarOverlay');
-    if (overlay) overlay.addEventListener('click', closeSidebar);
-
-    // Theme toggle
-    document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-
-    // Search on Enter
-    document.getElementById('searchInput')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') doSearch();
-    });
-
-    // Editor dropdown population when page loads
-    const observer = new MutationObserver(() => {
-      if (document.getElementById('page-editor')?.classList.contains('active')) {
-        loadEditorDropdown();
-      }
-    });
-    document.querySelectorAll('.page').forEach(p => {
-      observer.observe(p, { attributes: true, attributeFilter: ['class'] });
-    });
-
-    // Connection check
-    checkConnection();
-    setInterval(checkConnection, 30000);
-  });
-
-  // Expose globally
-  window.navigateTo = navigateTo;
-  window.api = api;
-  window.toast = toast;
-})();
+// ---- Init ----
+renderPage('dashboard');
