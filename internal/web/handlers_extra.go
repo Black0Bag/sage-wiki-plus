@@ -36,12 +36,17 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := updates["llm_model"]; ok {
 			if s, ok := v.(string); ok {
-				newCfg.LLM.Model = s
+				newCfg.Models.Summarize = s
+				newCfg.Models.Extract = s
+				newCfg.Models.Write = s
 			}
 		}
 		if v, ok := updates["embedding_model"]; ok {
 			if s, ok := v.(string); ok {
-				newCfg.Embedding.Model = s
+				if newCfg.Embed == nil {
+					newCfg.Embed = &config.EmbedConfig{}
+				}
+				newCfg.Embed.Model = s
 			}
 		}
 		if v, ok := updates["project"]; ok {
