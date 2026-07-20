@@ -102,10 +102,12 @@ func (s *Server) ServeStdio() error {
 }
 
 // ServeSSE starts the MCP server on SSE transport.
-func (s *Server) ServeSSE(addr string) error {
+// listenAddr is the address the server listens on (e.g. "0.0.0.0:8083").
+// advertiseURL is the base URL announced to clients (e.g. "http://192.168.1.2:8083").
+func (s *Server) ServeSSE(listenAddr, advertiseURL string) error {
 	defer s.db.Close()
-	sseServer := server.NewSSEServer(s.mcp, server.WithBaseURL("http://"+addr))
-	return sseServer.Start(addr)
+	sseServer := server.NewSSEServer(s.mcp, server.WithBaseURL(advertiseURL))
+	return sseServer.Start(listenAddr)
 }
 
 // Close cleans up resources.

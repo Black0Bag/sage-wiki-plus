@@ -491,9 +491,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if transport == "sse" {
 		port, _ := cmd.Flags().GetInt("port")
 		bind, _ := cmd.Flags().GetString("bind")
-		addr := fmt.Sprintf("%s:%d", bind, port)
-		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on SSE (%s)...\n", addr)
-		return srv.ServeSSE(addr)
+		listenAddr := fmt.Sprintf("%s:%d", bind, port)
+		// Use bind address for the base URL; if bound to 0.0.0.0, fallback to a public IP
+		advertiseHost := bind
+		if advertiseHost == "0.0.0.0" || advertiseHost == "" {
+			advertiseHost = "127.0.0.1"
+		}
+		advertiseURL := fmt.Sprintf("http://%s:%d", advertiseHost, port)
+		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on SSE (%s), advertise: %s\n", listenAddr, advertiseURL)
+		return srv.ServeSSE(listenAddr, advertiseURL)
 	}
 
 	fmt.Fprintln(os.Stderr, "sage-wiki MCP server starting on stdio...")
