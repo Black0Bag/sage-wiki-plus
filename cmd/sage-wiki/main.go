@@ -490,8 +490,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	transport, _ := cmd.Flags().GetString("transport")
 	if transport == "sse" {
 		port, _ := cmd.Flags().GetInt("port")
-		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on SSE (127.0.0.1:%d)...\n", port)
-		return srv.ServeSSE(port)
+		bind, _ := cmd.Flags().GetString("bind")
+		addr := fmt.Sprintf("%s:%d", bind, port)
+		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on SSE (%s)...\n", addr)
+		return srv.ServeSSE(addr)
 	}
 
 	fmt.Fprintln(os.Stderr, "sage-wiki MCP server starting on stdio...")

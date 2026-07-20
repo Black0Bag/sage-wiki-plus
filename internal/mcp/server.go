@@ -101,10 +101,9 @@ func (s *Server) ServeStdio() error {
 	return server.ServeStdio(s.mcp)
 }
 
-// ServeSSE starts the MCP server on SSE transport (localhost only).
-func (s *Server) ServeSSE(port int) error {
+// ServeSSE starts the MCP server on SSE transport.
+func (s *Server) ServeSSE(addr string) error {
 	defer s.db.Close()
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	sseServer := server.NewSSEServer(s.mcp, server.WithBaseURL("http://"+addr))
 	return sseServer.Start(addr)
 }
