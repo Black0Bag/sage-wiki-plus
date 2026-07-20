@@ -1,0 +1,855 @@
+package config
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+var typeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// Config represents the sage-wiki project configuration.
+type Config struct {
+	Extends     string         `yaml:"extends,omitempty"`
+	Version     int            `yaml:"version"`
+	Project     string         `yaml:"project"`
+	Description string         `yaml:"description"`
+	Language    string         `yaml:"language,omitempty"`
+	Vault       *VaultConfig   `yaml:"vault,omitempty"`
+	Sources     []Source       `yaml:"sources"`
+	Output      string         `yaml:"output"`
+	Ignore      []string       `yaml:"ignore,omitempty"`
+	API         APIConfig      `yaml:"api"`
+	Models      ModelsConfig   `yaml:"models"`
+	Embed       *EmbedConfig   `yaml:"embed,omitempty"`
+	Compiler    CompilerConfig `yaml:"compiler"`
+	Search      SearchConfig   `yaml:"search"`
+	Linting     LintingConfig  `yaml:"linting"`
+	Serve       ServeConfig    `yaml:"serve"`
+	Ontology    OntologyConfig `yaml:"ontology,omitempty"`
+	Trust       TrustConfig    `yaml:"trust,omitempty"`
+	Parsers     ParsersConfig  `yaml:"parsers,omitempty"`
+	TypeSignals []TypeSignal   `yaml:"type_signals,omitempty"`
+}
+
+type VaultConfig struct {
+	Root string `yaml:"root"`
+}
+
+type Source struct {
+	Path  string `yaml:"path"`
+	Type  string `yaml:"type"`
+	Watch bool   `yaml:"watch"`
+}
+
+type APIConfig struct {
+	Provider    string                 `yaml:"provider"`
+	Auth        string                 `yaml:"auth,omitempty"` // "api_key" (default) or "subscription"
+	APIKey      string                 `yaml:"api_key"`
+	BaseURL     string                 `yaml:"base_url,omitempty"`
+	RateLimit   int                    `yaml:"rate_limit,omitempty"`
+	ExtraParams map[string]interface{} `yaml:"extra_params,omitempty"` // provider-specific params merged into request body
+}
+
+type ModelsConfig struct {
+	Summarize string `yaml:"summarize"`
+	Extract   string `yaml:"extract"`
+	Write     string `yaml:"write"`
+	Lint      string `yaml:"lint"`
+	Query     string `yaml:"query"`
+}
+
+type EmbedConfig struct {
+	Provider   string `yaml:"provider"`
+	Model      string `yaml:"model"`
+	Dimensions int    `yaml:"dimensions,omitempty"`
+	APIKey     string `yaml:"api_key,omitempty"`
+	BaseURL    string `yaml:"base_url,omitempty"`
+	RateLimit  int    `yaml:"rate_limit,omitempty"` // embedding RPM (0 = no limit, -1 = explicit disable)
+}
+
+type CompilerConfig struct {
+	MaxParallel        int      `yaml:"max_parallel"`
+	DebounceSeconds    int      `yaml:"debounce_seconds"`
+	SummaryMaxTokens   int      `yaml:"summary_max_tokens"`
+	ArticleMaxTokens   int      `yaml:"article_max_tokens"`
+	ExtractMaxTokens   int      `yaml:"extract_max_tokens,omitempty"` // max output tokens for concept extraction (default: 8192)
+	ExtractBatchSize   int      `yaml:"extract_batch_size,omitempty"` // summaries per concept extraction call (default: 20)
+	AutoCommit         bool     `yaml:"auto_commit"`
+	AutoLint           bool     `yaml:"auto_lint"`
+	Mode               string   `yaml:"mode,omitempty"`                    // standard, batch, or auto
+	EstimateBefore     bool     `yaml:"estimate_before,omitempty"`         // prompt with cost estimate before compiling
+	PromptCache        *bool    `yaml:"prompt_cache,omitempty"`            // enable prompt caching (default: true)
+	BatchThreshold     int      `yaml:"batch_threshold,omitempty"`         // min sources to auto-select batch mode
+	TokenPriceOverride float64  `yaml:"token_price_per_million,omitempty"` // override price per 1M input tokens
+	Timezone           string   `yaml:"timezone,omitempty"`                // IANA timezone for user-facing timestamps (default: UTC)
+	ArticleFields      []string `yaml:"article_fields,omitempty"`          // custom frontmatter fields extracted from LLM response
+
+	// Tiered compilation
+	DefaultTier    int            `yaml:"default_tier,omitempty"`  // default tier for sources (default: 3)
+	TierDefaults   map[string]int `yaml:"tier_defaults,omitempty"` // file extension → default tier
+	AutoPromote    *bool          `yaml:"auto_promote,omitempty"`  // auto-promote based on signals (default: true)
+	PromoteSignals PromoteSignals `yaml:"promote_signals,omitempty"`
+	AutoDemote     *bool          `yaml:"auto_demote,omitempty"` // auto-demote stale articles (default: true)
+	DemoteSignals  DemoteSignals  `yaml:"demote_signals,omitempty"`
+
+	// Document splitting (Phase B)
+	SplitThreshold int    `yaml:"split_threshold,omitempty"` // chars, enable section-aware writing above this (default: 15000)
+	SplitStrategy  string `yaml:"split_strategy,omitempty"`  // "headings" (default)
+
+	// Backpressure
+	BackpressureEnabled *bool `yaml:"backpressure,omitempty"` // enable adaptive backpressure (default: true)
+
+	// Concept deduplication
+	DedupThreshold float64 `yaml:"dedup_threshold,omitempty"` // cosine similarity for auto-merge (default: 0.85)
+	DedupStrategy  string  `yaml:"dedup_strategy,omitempty"`  // "embedding" (default) or "llm"
+
+	// Wikilink validation
+	StripBrokenLinks *bool `yaml:"strip_broken_links,omitempty"` // strip [[wikilinks]] to non-existent concept articles after compile (default: true). Set false to preserve broken links (useful when expecting future compiles to fill them in). Issue #90.
+
+	// Article quality scoring (issue #97)
+	Quality QualityConfig `yaml:"quality,omitempty"`
+
+	// Article post-processing (issue #95). Sentences containing any of these
+	// phrases are stripped from compiled articles. nil (omitted) → built-in
+	// default list; explicit `[]` → disabled (no stripping).
+	AntiPatternPhrases []string `yaml:"anti_pattern_phrases,omitempty"`
+
+	// Summary filename scheme (issue #107). "full" (default) hyphen-joins every
+	// source-path segment (collision-safe, issue #51). "relative" strips the
+	// configured source-root prefix and collapses a duplicated trailing segment
+	// (e.g. marker-pdf's <X>/<X>.md → X.md), trading some cross-path collision
+	// safety for cleaner names. Changing this renames summaries going forward;
+	// enabling it requires a full recompile to rename existing files.
+	SummaryNaming string `yaml:"summary_naming,omitempty"`
+
+	resolvedTZ *time.Location `yaml:"-"` // cached by Validate(); not serialized
+}
+
+// defaultAntiPatternPhrases is the built-in bilingual filler/meta-phrase list
+// stripped from article bodies when compiler.anti_pattern_phrases is unset
+// (issue #95). Matched case-insensitively as substrings of a sentence.
+var defaultAntiPatternPhrases = []string{
+	"this article will",
+	"in summary",
+	"in conclusion",
+	"the source documents don't mention",
+	"the source document does not mention",
+	"本文将介绍",
+	"本文将",
+	"综上所述",
+	"源文档未提及",
+}
+
+// AntiPatternPhrasesOrDefault returns the configured anti-pattern phrase list.
+// A nil (omitted) value yields the built-in default; an explicit empty list
+// disables stripping. The returned slice must not be mutated by callers.
+func (c CompilerConfig) AntiPatternPhrasesOrDefault() []string {
+	if c.AntiPatternPhrases == nil {
+		return defaultAntiPatternPhrases
+	}
+	return c.AntiPatternPhrases
+}
+
+// SummaryNamingOrDefault returns the summary filename scheme, defaulting to
+// "full" when unset (issue #107). Validate() rejects any other value.
+func (c CompilerConfig) SummaryNamingOrDefault() string {
+	if c.SummaryNaming == "" {
+		return "full"
+	}
+	return c.SummaryNaming
+}
+
+// QualityConfig configures the zero-LLM 5-dimension article quality scorer
+// (issue #97). All fields default when zero — see CompilerConfig.QualityThreshold
+// and CompilerConfig.QualityWeights. The composite score is stored in
+// compile_items.quality_score and surfaced (not gated) by `sage-wiki lint`.
+type QualityConfig struct {
+	Threshold         float64 `yaml:"threshold,omitempty"`          // warn below this composite score (default: 0.5)
+	WeightFormat      float64 `yaml:"weight_format,omitempty"`      // default: 0.15
+	WeightGrounding   float64 `yaml:"weight_grounding,omitempty"`   // default: 0.30
+	WeightCoverage    float64 `yaml:"weight_coverage,omitempty"`    // default: 0.20
+	WeightWikilink    float64 `yaml:"weight_wikilink,omitempty"`    // default: 0.15
+	WeightAntiPattern float64 `yaml:"weight_antipattern,omitempty"` // default: 0.20
+}
+
+// Default quality weights (issue #97 proposal). Kept here so the config
+// accessors can supply per-field fallbacks without importing the compiler.
+const (
+	defaultQualityThreshold         = 0.5
+	defaultQualityWeightFormat      = 0.15
+	defaultQualityWeightGrounding   = 0.30
+	defaultQualityWeightCoverage    = 0.20
+	defaultQualityWeightWikilink    = 0.15
+	defaultQualityWeightAntiPattern = 0.20
+)
+
+// QualityThreshold returns the configured low-quality warning threshold,
+// or the default (0.5) when unset.
+func (c CompilerConfig) QualityThreshold() float64 {
+	if c.Quality.Threshold > 0 {
+		return c.Quality.Threshold
+	}
+	return defaultQualityThreshold
+}
+
+// QualityWeights returns the five scorer dimension weights as plain floats
+// (config must not import the compiler package). Each field falls back to
+// its #97 default when left at zero, so partial overrides work.
+func (c CompilerConfig) QualityWeights() (format, grounding, coverage, wikilink, antiPattern float64) {
+	q := c.Quality
+	format = q.WeightFormat
+	if format == 0 {
+		format = defaultQualityWeightFormat
+	}
+	grounding = q.WeightGrounding
+	if grounding == 0 {
+		grounding = defaultQualityWeightGrounding
+	}
+	coverage = q.WeightCoverage
+	if coverage == 0 {
+		coverage = defaultQualityWeightCoverage
+	}
+	wikilink = q.WeightWikilink
+	if wikilink == 0 {
+		wikilink = defaultQualityWeightWikilink
+	}
+	antiPattern = q.WeightAntiPattern
+	if antiPattern == 0 {
+		antiPattern = defaultQualityWeightAntiPattern
+	}
+	return format, grounding, coverage, wikilink, antiPattern
+}
+
+// PromoteSignals configures when sources are promoted to higher tiers.
+type PromoteSignals struct {
+	QueryHitCount     int    `yaml:"query_hit_count,omitempty"`     // promote after N search hits (default: 3)
+	ClusterSize       int    `yaml:"cluster_size,omitempty"`        // promote when N+ sources on same topic (default: 5)
+	ManualTag         string `yaml:"manual_tag,omitempty"`          // promote if tagged (default: "compile")
+	ImportCentrality  int    `yaml:"import_centrality,omitempty"`   // code: promote when N+ files import this (default: 10)
+	SourceRecencyDays int    `yaml:"source_recency_days,omitempty"` // boost recently modified (default: 7)
+}
+
+// DemoteSignals configures when sources are demoted to lower tiers.
+type DemoteSignals struct {
+	SourceModified bool `yaml:"source_modified,omitempty"` // revert to Tier 1 on source change (default: true)
+	StaleDays      int  `yaml:"stale_days,omitempty"`      // demote after N days with no queries (default: 90)
+}
+
+// AutoPromoteEnabled returns whether auto-promotion is enabled (default: true).
+func (c CompilerConfig) AutoPromoteEnabled() bool {
+	if c.AutoPromote == nil {
+		return true
+	}
+	return *c.AutoPromote
+}
+
+// AutoDemoteEnabled returns whether auto-demotion is enabled (default: true).
+func (c CompilerConfig) AutoDemoteEnabled() bool {
+	if c.AutoDemote == nil {
+		return true
+	}
+	return *c.AutoDemote
+}
+
+// BackpressureIsEnabled returns whether backpressure is enabled (default: true).
+func (c CompilerConfig) BackpressureIsEnabled() bool {
+	if c.BackpressureEnabled == nil {
+		return true
+	}
+	return *c.BackpressureEnabled
+}
+
+// StripBrokenLinksEnabled returns whether dead [[wikilinks]] are stripped
+// from articles after compile (default: true). Issue #90.
+func (c CompilerConfig) StripBrokenLinksEnabled() bool {
+	if c.StripBrokenLinks == nil {
+		return true
+	}
+	return *c.StripBrokenLinks
+}
+
+type SearchConfig struct {
+	HybridWeightBM25   float64 `yaml:"hybrid_weight_bm25"`
+	HybridWeightVector float64 `yaml:"hybrid_weight_vector"`
+	DefaultLimit       int     `yaml:"default_limit"`
+	QueryExpansion     *bool   `yaml:"query_expansion,omitempty"`  // enable LLM query expansion (default: true)
+	Rerank             *bool   `yaml:"rerank,omitempty"`           // enable LLM re-ranking (default: true)
+	ChunkSize          int     `yaml:"chunk_size,omitempty"`       // tokens per chunk for indexing (default: 800)
+	ResultMaxChars     int     `yaml:"result_max_chars,omitempty"` // max chars (runes) of content per wiki_search result before truncation (default: 2000; set very high to effectively disable)
+
+	// Graph-enhanced retrieval
+	GraphExpansion       *bool    `yaml:"graph_expansion,omitempty"`        // enable graph-based context expansion (default: true)
+	GraphMaxExpand       int      `yaml:"graph_max_expand,omitempty"`       // max articles added via graph (default: 10)
+	GraphDepth           int      `yaml:"graph_depth,omitempty"`            // traversal depth for expansion (default: 2)
+	ContextMaxTokens     int      `yaml:"context_max_tokens,omitempty"`     // token budget for query context (default: 8000)
+	WeightDirectLink     *float64 `yaml:"weight_direct_link,omitempty"`     // graph signal weight (default: 3.0, set 0 to disable)
+	WeightSourceOverlap  *float64 `yaml:"weight_source_overlap,omitempty"`  // graph signal weight (default: 4.0, set 0 to disable)
+	WeightCommonNeighbor *float64 `yaml:"weight_common_neighbor,omitempty"` // graph signal weight (default: 1.5, set 0 to disable)
+	WeightTypeAffinity   *float64 `yaml:"weight_type_affinity,omitempty"`   // graph signal weight (default: 1.0, set 0 to disable)
+}
+
+// QueryExpansionEnabled returns whether query expansion is enabled (default: true).
+func (s SearchConfig) QueryExpansionEnabled() bool {
+	if s.QueryExpansion == nil {
+		return true
+	}
+	return *s.QueryExpansion
+}
+
+// RerankEnabled returns whether re-ranking is enabled (default: true).
+func (s SearchConfig) RerankEnabled() bool {
+	if s.Rerank == nil {
+		return true
+	}
+	return *s.Rerank
+}
+
+// ChunkSizeOrDefault returns the chunk size or 800 if not set.
+func (s SearchConfig) ChunkSizeOrDefault() int {
+	if s.ChunkSize <= 0 {
+		return 800
+	}
+	return s.ChunkSize
+}
+
+// GraphExpansionEnabled returns whether graph expansion is enabled (default: true).
+func (s SearchConfig) GraphExpansionEnabled() bool {
+	if s.GraphExpansion == nil {
+		return true
+	}
+	return *s.GraphExpansion
+}
+
+// GraphMaxExpandOrDefault returns the max expand or 10 if not set.
+func (s SearchConfig) GraphMaxExpandOrDefault() int {
+	if s.GraphMaxExpand <= 0 {
+		return 10
+	}
+	return s.GraphMaxExpand
+}
+
+// GraphDepthOrDefault returns the graph depth or 2 if not set.
+func (s SearchConfig) GraphDepthOrDefault() int {
+	if s.GraphDepth <= 0 {
+		return 2
+	}
+	return s.GraphDepth
+}
+
+// ContextMaxTokensOrDefault returns the context token budget or 8000 if not set.
+func (s SearchConfig) ContextMaxTokensOrDefault() int {
+	if s.ContextMaxTokens <= 0 {
+		return 8000
+	}
+	return s.ContextMaxTokens
+}
+
+// ResultMaxCharsOrDefault returns the per-result content cap (in runes) for
+// wiki_search, or 2000 if not set. Bounds the MCP search payload so a single
+// search can't overflow the calling agent's context; full text stays available
+// via wiki_read.
+func (s SearchConfig) ResultMaxCharsOrDefault() int {
+	if s.ResultMaxChars <= 0 {
+		return 2000
+	}
+	return s.ResultMaxChars
+}
+
+// WeightDirectLinkOrDefault returns the direct link weight or 3.0 if not set.
+// Explicit 0 disables this signal.
+func (s SearchConfig) WeightDirectLinkOrDefault() float64 {
+	if s.WeightDirectLink == nil {
+		return 3.0
+	}
+	return *s.WeightDirectLink
+}
+
+// WeightSourceOverlapOrDefault returns the source overlap weight or 4.0 if not set.
+// Explicit 0 disables this signal.
+func (s SearchConfig) WeightSourceOverlapOrDefault() float64 {
+	if s.WeightSourceOverlap == nil {
+		return 4.0
+	}
+	return *s.WeightSourceOverlap
+}
+
+// WeightCommonNeighborOrDefault returns the common neighbor weight or 1.5 if not set.
+// Explicit 0 disables this signal.
+func (s SearchConfig) WeightCommonNeighborOrDefault() float64 {
+	if s.WeightCommonNeighbor == nil {
+		return 1.5
+	}
+	return *s.WeightCommonNeighbor
+}
+
+// WeightTypeAffinityOrDefault returns the type affinity weight or 1.0 if not set.
+// Explicit 0 disables this signal.
+func (s SearchConfig) WeightTypeAffinityOrDefault() float64 {
+	if s.WeightTypeAffinity == nil {
+		return 1.0
+	}
+	return *s.WeightTypeAffinity
+}
+
+type LintingConfig struct {
+	AutoFixPasses          []string `yaml:"auto_fix_passes"`
+	StalenessThresholdDays int      `yaml:"staleness_threshold_days"`
+}
+
+type ServeConfig struct {
+	Transport string `yaml:"transport"`
+	Port      int    `yaml:"port"`
+}
+
+// TypeSignal defines a content-based type detection rule.
+// Files are matched by filename keywords and/or content keywords.
+type TypeSignal struct {
+	Type             string   `yaml:"type"`
+	Pattern          string   `yaml:"pattern,omitempty"`           // simple substring match (legacy)
+	FilenameKeywords []string `yaml:"filename_keywords,omitempty"` // keywords matched against filename
+	ContentKeywords  []string `yaml:"content_keywords,omitempty"`  // keywords matched against content head
+	MinContentHits   int      `yaml:"min_content_hits,omitempty"`  // minimum content keyword matches required
+}
+
+// OntologyConfig configures ontology relation and entity types.
+type OntologyConfig struct {
+	Relations     []RelationConfig   `yaml:"relations,omitempty"`
+	RelationTypes []RelationConfig   `yaml:"relation_types,omitempty"` // preferred key; "relations" accepted for backwards compat
+	EntityTypes   []EntityTypeConfig `yaml:"entity_types,omitempty"`
+}
+
+// RelationConfig defines a custom or extended relation type.
+type RelationConfig struct {
+	Name         string   `yaml:"name"`
+	Synonyms     []string `yaml:"synonyms"`
+	ValidSources []string `yaml:"valid_sources,omitempty"`
+	ValidTargets []string `yaml:"valid_targets,omitempty"`
+}
+
+// EntityTypeConfig defines a custom or extended entity type.
+type EntityTypeConfig struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description,omitempty"`
+}
+
+// TrustConfig controls the output trust system (staged QA for query outputs).
+type TrustConfig struct {
+	IncludeOutputs      string  `yaml:"include_outputs,omitempty"`      // "false" (default), "verified", "true"
+	ConsensusThreshold  int     `yaml:"consensus_threshold,omitempty"`  // confirmations for promotion (default: 3)
+	GroundingThreshold  float64 `yaml:"grounding_threshold,omitempty"`  // min grounding score (default: 0.8)
+	AutoPromote         *bool   `yaml:"auto_promote,omitempty"`         // auto-promote when thresholds met (default: true)
+	SimilarityThreshold float64 `yaml:"similarity_threshold,omitempty"` // cosine sim for question matching (default: 0.85)
+}
+
+// IncludeOutputsMode returns the effective include_outputs mode.
+// Empty string is treated as "false" (safe default).
+func (t TrustConfig) IncludeOutputsMode() string {
+	if t.IncludeOutputs == "" {
+		return "false"
+	}
+	return t.IncludeOutputs
+}
+
+// AutoPromoteEnabled returns whether auto-promotion is enabled (default: true).
+func (t TrustConfig) AutoPromoteEnabled() bool {
+	if t.AutoPromote == nil {
+		return true
+	}
+	return *t.AutoPromote
+}
+
+// ConsensusThresholdOrDefault returns the consensus threshold or 3 if not set.
+func (t TrustConfig) ConsensusThresholdOrDefault() int {
+	if t.ConsensusThreshold <= 0 {
+		return 3
+	}
+	return t.ConsensusThreshold
+}
+
+// GroundingThresholdOrDefault returns the grounding threshold or 0.8 if not set.
+func (t TrustConfig) GroundingThresholdOrDefault() float64 {
+	if t.GroundingThreshold <= 0 {
+		return 0.8
+	}
+	return t.GroundingThreshold
+}
+
+// ParsersConfig controls external parser behavior.
+type ParsersConfig struct {
+	External      bool `yaml:"external,omitempty"`       // enable external parsers (default: false)
+	TrustExternal bool `yaml:"trust_external,omitempty"` // acknowledge that external parsers run unsandboxed code (default: false)
+}
+
+// SimilarityThresholdOrDefault returns the similarity threshold or 0.85 if not set.
+func (t TrustConfig) SimilarityThresholdOrDefault() float64 {
+	if t.SimilarityThreshold <= 0 {
+		return 0.85
+	}
+	return t.SimilarityThreshold
+}
+
+// Defaults returns a Config with sensible defaults for greenfield mode.
+func Defaults() Config {
+	return Config{
+		Version: 1,
+		Output:  "wiki",
+		Sources: []Source{{Path: "raw", Type: "auto", Watch: true}},
+		Compiler: CompilerConfig{
+			MaxParallel:      20,
+			DebounceSeconds:  2,
+			SummaryMaxTokens: 4000,
+			ArticleMaxTokens: 4000,
+			ExtractMaxTokens: 8192,
+			ExtractBatchSize: 20,
+			AutoCommit:       true,
+			AutoLint:         true,
+			DefaultTier:      3,
+			Mode:             "auto",
+		},
+		Search: SearchConfig{
+			HybridWeightBM25:   0.7,
+			HybridWeightVector: 0.3,
+			DefaultLimit:       10,
+		},
+		Linting: LintingConfig{
+			AutoFixPasses:          []string{"consistency", "completeness", "style"},
+			StalenessThresholdDays: 90,
+		},
+		Serve: ServeConfig{
+			Transport: "stdio",
+			Port:      3333,
+		},
+		Trust: TrustConfig{
+			IncludeOutputs: "false",
+		},
+	}
+}
+
+// PromptCacheEnabled returns whether prompt caching is enabled (default: true).
+func (c *CompilerConfig) PromptCacheEnabled() bool {
+	if c.PromptCache == nil {
+		return true
+	}
+	return *c.PromptCache
+}
+
+// UserTimeLocation returns the configured timezone for user-facing timestamps.
+// Returns the cached location set by Validate(), or resolves from Timezone string.
+// Defaults to UTC if Timezone is empty or invalid.
+func (c *CompilerConfig) UserTimeLocation() *time.Location {
+	if c.resolvedTZ != nil {
+		return c.resolvedTZ
+	}
+	if c.Timezone != "" {
+		if loc, err := time.LoadLocation(c.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.UTC
+}
+
+// UserNow returns the current time formatted in RFC3339 using the configured timezone.
+func (c *CompilerConfig) UserNow() string {
+	return time.Now().In(c.UserTimeLocation()).Format(time.RFC3339)
+}
+
+// Load reads and parses a config file, expanding environment variables.
+// If the config contains an "extends" field, the base config is loaded first
+// and deep-merged with the child config (maps merge recursively, scalars/slices
+// from child replace base). At most one level of inheritance (base's extends is ignored).
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config.Load: %w", err)
+	}
+
+	// Expand environment variables in ${VAR} format
+	expanded := expandEnvVars(string(data))
+
+	// Quick parse to check for extends field
+	var peek struct {
+		Extends string `yaml:"extends"`
+	}
+	yaml.Unmarshal([]byte(expanded), &peek)
+
+	finalYAML := expanded
+	if peek.Extends != "" {
+		basePath := peek.Extends
+		if !filepath.IsAbs(basePath) {
+			basePath = filepath.Join(filepath.Dir(path), basePath)
+		}
+
+		baseData, err := os.ReadFile(basePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: extends base %q not found, using child config only\n", peek.Extends)
+		} else {
+			baseExpanded := expandEnvVars(string(baseData))
+
+			// Deep merge via map[string]any to avoid yaml.v3 zero-value clobbering
+			var baseMap, childMap map[string]any
+			if err := yaml.Unmarshal([]byte(baseExpanded), &baseMap); err != nil {
+				return nil, fmt.Errorf("config.Load: parse base %q: %w", peek.Extends, err)
+			}
+			if err := yaml.Unmarshal([]byte(expanded), &childMap); err != nil {
+				return nil, fmt.Errorf("config.Load: parse child: %w", err)
+			}
+			// Remove extends from child before merge
+			delete(childMap, "extends")
+
+			merged := deepMerge(baseMap, childMap)
+			mergedBytes, err := yaml.Marshal(merged)
+			if err != nil {
+				return nil, fmt.Errorf("config.Load: marshal merged: %w", err)
+			}
+			finalYAML = string(mergedBytes)
+		}
+	}
+
+	cfg := Defaults()
+	if err := yaml.Unmarshal([]byte(finalYAML), &cfg); err != nil {
+		return nil, fmt.Errorf("config.Load: parse error: %w", err)
+	}
+	cfg.Extends = "" // clear after merge
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+// Save writes the config to a YAML file.
+func (c *Config) Save(path string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("config.Save: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// Validate checks required fields and values.
+func (c *Config) Validate() error {
+	if c.Project == "" {
+		return fmt.Errorf("config: 'project' is required")
+	}
+	if c.Output == "" {
+		return fmt.Errorf("config: 'output' is required")
+	}
+	if len(c.Sources) == 0 {
+		return fmt.Errorf("config: at least one source is required")
+	}
+	if c.API.Provider != "" {
+		validProviders := map[string]bool{
+			"anthropic": true, "openai": true, "gemini": true, "ollama": true, "openai-compatible": true, "qwen": true,
+		}
+		if !validProviders[c.API.Provider] {
+			return fmt.Errorf("config: invalid provider %q (valid: anthropic, openai, gemini, ollama, openai-compatible, qwen)", c.API.Provider)
+		}
+	}
+	if c.API.Auth != "" && c.API.Auth != "api_key" {
+		if c.API.Auth != "subscription" {
+			return fmt.Errorf("config: invalid api.auth %q (valid: api_key, subscription)", c.API.Auth)
+		}
+		if c.API.Provider == "" {
+			return fmt.Errorf("config: subscription auth requires api.provider to be set (openai, anthropic, or gemini)")
+		}
+		subscriptionProviders := map[string]bool{"openai": true, "anthropic": true, "gemini": true}
+		if !subscriptionProviders[c.API.Provider] {
+			return fmt.Errorf("config: subscription auth is not supported for provider %q (requires: openai, anthropic, or gemini)", c.API.Provider)
+		}
+	}
+	if mode := c.Trust.IncludeOutputs; mode != "" {
+		validModes := map[string]bool{"false": true, "verified": true, "true": true}
+		if !validModes[mode] {
+			return fmt.Errorf("config: invalid trust.include_outputs %q (valid: \"false\", \"verified\", \"true\")", mode)
+		}
+	}
+	if c.Serve.Transport != "" {
+		if c.Serve.Transport != "stdio" && c.Serve.Transport != "sse" {
+			return fmt.Errorf("config: invalid transport %q (valid: stdio, sse)", c.Serve.Transport)
+		}
+	}
+	if c.Compiler.Mode != "" {
+		validModes := map[string]bool{"standard": true, "batch": true, "auto": true}
+		if !validModes[c.Compiler.Mode] {
+			return fmt.Errorf("config: invalid compiler.mode %q (valid: standard, batch, auto)", c.Compiler.Mode)
+		}
+	}
+	if c.Compiler.SummaryNaming != "" {
+		validNaming := map[string]bool{"full": true, "relative": true}
+		if !validNaming[c.Compiler.SummaryNaming] {
+			return fmt.Errorf("config: invalid summary_naming %q (valid: full, relative)", c.Compiler.SummaryNaming)
+		}
+	}
+	// Merge relation_types (preferred) and relations (deprecated) keys.
+	// If both are set, relation_types takes precedence.
+	if len(c.Ontology.RelationTypes) > 0 {
+		c.Ontology.Relations = c.Ontology.RelationTypes
+		c.Ontology.RelationTypes = nil // normalize to single field
+	} else if len(c.Ontology.Relations) > 0 {
+		log.Println("config: ontology.relations is deprecated, use ontology.relation_types instead")
+	}
+	for _, r := range c.Ontology.Relations {
+		if r.Name == "" {
+			return fmt.Errorf("config: ontology.relation_types: name is required")
+		}
+		if !typeNameRe.MatchString(r.Name) {
+			return fmt.Errorf("config: ontology.relation_types: invalid name %q (must match [a-z][a-z0-9_]*)", r.Name)
+		}
+	}
+	for _, et := range c.Ontology.EntityTypes {
+		if et.Name == "" {
+			return fmt.Errorf("config: ontology.entity_types: name is required")
+		}
+		if !typeNameRe.MatchString(et.Name) {
+			return fmt.Errorf("config: ontology.entity_types: invalid name %q (must match [a-z][a-z0-9_]*)", et.Name)
+		}
+	}
+	if c.Search.ChunkSize != 0 && (c.Search.ChunkSize < 100 || c.Search.ChunkSize > 5000) {
+		return fmt.Errorf("config: search.chunk_size must be 100-5000, got %d", c.Search.ChunkSize)
+	}
+	for i, ts := range c.TypeSignals {
+		if ts.Type == "" {
+			return fmt.Errorf("config: type_signals[%d]: type is required", i)
+		}
+		if len(ts.FilenameKeywords) == 0 && len(ts.ContentKeywords) == 0 && ts.Pattern == "" {
+			return fmt.Errorf("config: type_signals[%d] (%s): at least one keyword (filename, content, or pattern) is required", i, ts.Type)
+		}
+		if len(ts.ContentKeywords) > 0 && ts.MinContentHits <= 0 {
+			return fmt.Errorf("config: type_signals[%d] (%s): min_content_hits must be > 0 when content_keywords is set", i, ts.Type)
+		}
+	}
+	if c.Compiler.Timezone != "" {
+		loc, err := time.LoadLocation(c.Compiler.Timezone)
+		if err != nil {
+			return fmt.Errorf("config: invalid compiler.timezone %q: %w", c.Compiler.Timezone, err)
+		}
+		c.Compiler.resolvedTZ = loc
+	}
+	// Quality scorer ranges (issue #97). Zero is valid everywhere — it means
+	// "use the default" (see QualityThreshold / QualityWeights). Reject only
+	// out-of-range values, never zero.
+	if t := c.Compiler.Quality.Threshold; t < 0 || t > 1 {
+		return fmt.Errorf("config: compiler.quality.threshold must be in [0,1], got %g", t)
+	}
+	qw := []struct {
+		name string
+		val  float64
+	}{
+		{"weight_format", c.Compiler.Quality.WeightFormat},
+		{"weight_grounding", c.Compiler.Quality.WeightGrounding},
+		{"weight_coverage", c.Compiler.Quality.WeightCoverage},
+		{"weight_wikilink", c.Compiler.Quality.WeightWikilink},
+		{"weight_antipattern", c.Compiler.Quality.WeightAntiPattern},
+	}
+	for _, w := range qw {
+		if w.val < 0 {
+			return fmt.Errorf("config: compiler.quality.%s must be >= 0, got %g", w.name, w.val)
+		}
+	}
+	return nil
+}
+
+// IsVaultOverlay returns true if this is a vault overlay project.
+func (c *Config) IsVaultOverlay() bool {
+	return c.Vault != nil
+}
+
+// ResolveOutput returns the absolute output path relative to projectDir.
+func (c *Config) ResolveOutput(projectDir string) string {
+	if filepath.IsAbs(c.Output) {
+		return c.Output
+	}
+	return filepath.Join(projectDir, c.Output)
+}
+
+// ResolveSources returns absolute source paths relative to projectDir.
+func (c *Config) ResolveSources(projectDir string) []string {
+	paths := make([]string, len(c.Sources))
+	for i, s := range c.Sources {
+		if filepath.IsAbs(s.Path) {
+			paths[i] = s.Path
+		} else {
+			paths[i] = filepath.Join(projectDir, s.Path)
+		}
+	}
+	return paths
+}
+
+// TypeForPath returns the configured Source.Type for the source root that
+// contains the given path, or "" if no source matches or the source has no
+// explicit type. Both unset ("") and "auto" return "" so callers fall back
+// to extension/signal detection.
+//
+// When multiple configured sources have overlapping paths (e.g. "raw/" and
+// "raw/adr/"), the longest matching prefix wins. Path-boundary anchoring
+// prevents "raw/adr" from matching files under "raw/adr-old/".
+//
+// The input path may be absolute or relative to projectDir. Sources with
+// relative paths are resolved against projectDir for comparison.
+func (c *Config) TypeForPath(projectDir, path string) string {
+	if len(c.Sources) == 0 {
+		return ""
+	}
+	absPath := path
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(projectDir, path)
+	}
+	absPath = filepath.Clean(absPath)
+
+	var bestSrc Source
+	var bestLen int
+	matched := false
+	for _, s := range c.Sources {
+		srcAbs := s.Path
+		if !filepath.IsAbs(srcAbs) {
+			srcAbs = filepath.Join(projectDir, s.Path)
+		}
+		srcAbs = filepath.Clean(srcAbs)
+
+		// path-boundary anchoring: srcAbs is a parent of absPath only if
+		// absPath equals srcAbs OR has srcAbs + separator as prefix
+		sep := string(filepath.Separator)
+		if absPath == srcAbs || strings.HasPrefix(absPath, srcAbs+sep) {
+			if len(srcAbs) > bestLen {
+				bestLen = len(srcAbs)
+				bestSrc = s
+				matched = true
+			}
+		}
+	}
+	if !matched {
+		return ""
+	}
+	if bestSrc.Type == "" || bestSrc.Type == "auto" {
+		return ""
+	}
+	return bestSrc.Type
+}
+
+// expandEnvVars replaces ${VAR} references with environment variable values.
+func expandEnvVars(s string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(s) {
+		if i+1 < len(s) && s[i] == '$' && s[i+1] == '{' {
+			end := strings.Index(s[i:], "}")
+			if end != -1 {
+				varName := s[i+2 : i+end]
+				result.WriteString(os.Getenv(varName))
+				i += end + 1
+				continue
+			}
+		}
+		result.WriteByte(s[i])
+		i++
+	}
+	return result.String()
+}

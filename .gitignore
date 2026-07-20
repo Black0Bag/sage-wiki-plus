@@ -1,0 +1,19 @@
+# Claude
+.claude/
+CLAUDE.md
+.mcp.json
+
+# Sage
+.sage/
+.sage-memory/
+.sage-wiki/
+sage/
+
+# macOS
+.DS_Store
+
+# Build
+/sage-wiki
+bin/sage-wiki-plus
+.release_*
+.last_upstream*

@@ -1,0 +1,35 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每 6 小时检测一次
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "Black0Bag"
+          git config user.email "black0bag@users.noreply.github.com"
+
+      - name: Run sync script
+        run: |
+          chmod +x scripts/sync-upstream.sh
+          ./scripts/sync-upstream.sh
+        shell: bash
+
+      - name: Push changes
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to push"
+          else
+            git push origin main
+          fi

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>sage-wiki-plus</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📚</text></svg>" />
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top Navigation -->
+    <nav id="nav">
+      <button id="menuBtn" class="icon-btn" aria-label="菜单">☰</button>
+      <h1 id="navTitle">sage-wiki+</h1>
+      <div class="nav-end">
+        <button id="themeBtn" class="icon-btn" aria-label="主题">🌓</button>
+      </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h2>sage-wiki+</h2>
+        <button id="closeSidebar" class="icon-btn">✕</button>
+      </div>
+      <div class="sidebar-menu">
+        <a href="#/" class="menu-item active" data-route="dashboard">📊 仪表盘</a>
+        <a href="#/articles" class="menu-item" data-route="articles">📖 文章浏览器</a>
+        <a href="#/search" class="menu-item" data-route="search">🔍 搜索</a>
+        <a href="#/graph" class="menu-item" data-route="graph">🔗 知识图谱</a>
+        <a href="#/sources" class="menu-item" data-route="sources">📤 源文件管理</a>
+        <a href="#/editor" class="menu-item" data-route="editor">✏️ 在线编辑</a>
+        <a href="#/settings" class="menu-item" data-route="settings">⚙️ 服务设置</a>
+        <a href="#/about" class="menu-item" data-route="about">ℹ️ 关于</a>
+      </div>
+      <div class="sidebar-footer">
+        <div id="connStatus" class="status-dot disconnected"></div>
+        <span id="statusText">未连接</span>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main id="main">
+      <div id="content" class="page-content">
+        <!-- Dashboard -->
+        <div id="page-dashboard" class="page active">
+          <h2>📊 仪表盘</h2>
+          <div id="dashboardStats" class="stats-grid">
+            <div class="stat-card"><div class="stat-value" id="statEntries">-</div><div class="stat-label">条目</div></div>
+            <div class="stat-card"><div class="stat-value" id="statVectors">-</div><div class="stat-label">向量</div></div>
+            <div class="stat-card"><div class="stat-value" id="statEntities">-</div><div class="stat-label">实体</div></div>
+            <div class="stat-card"><div class="stat-value" id="statRelations">-</div><div class="stat-label">关系</div></div>
+            <div class="stat-card"><div class="stat-value" id="statConcepts">-</div><div class="stat-label">概念文章</div></div>
+            <div class="stat-card"><div class="stat-value" id="statSources">-</div><div class="stat-label">源文件</div></div>
+          </div>
+          <div class="action-buttons">
+            <button onclick="navigateTo('#/search')" class="btn primary">🔍 搜索知识库</button>
+            <button onclick="navigateTo('#/sources')" class="btn">📤 上传资料</button>
+            <button onclick="navigateTo('#/settings')" class="btn">⚙️ 配置服务</button>
+          </div>
+          <div id="dashboardProject" class="info-box"></div>
+        </div>
+
+        <!-- Articles -->
+        <div id="page-articles" class="page">
+          <h2>📖 文章浏览器</h2>
+          <div id="articleTree"></div>
+          <div id="articleViewer" class="article-viewer hidden"></div>
+        </div>
+
+        <!-- Search -->
+        <div id="page-search" class="page">
+          <h2>🔍 搜索</h2>
+          <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="搜索知识库..." />
+            <button onclick="doSearch()" class="btn primary">搜索</button>
+          </div>
+          <div id="searchResults"></div>
+        </div>
+
+        <!-- Graph -->
+        <div id="page-graph" class="page">
+          <h2>🔗 知识图谱</h2>
+          <p class="hint">显示文章间的关联关系（需要先编译）</p>
+          <div id="graphContainer" class="graph-container">
+            <canvas id="graphCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Sources -->
+        <div id="page-sources" class="page">
+          <h2>📤 源文件管理</h2>
+          <div class="upload-area" id="uploadArea">
+            <p>拖拽文件到此处或点击上传</p>
+            <input type="file" id="fileInput" multiple style="display:none" />
+            <button onclick="document.getElementById('fileInput').click()" class="btn primary">选择文件上传</button>
+          </div>
+          <div id="uploadProgress" class="hidden"></div>
+          <h3>已上传的源文件</h3>
+          <div id="sourceList"></div>
+          <div class="action-buttons">
+            <button onclick="triggerCompile()" class="btn">▶️ 触发编译</button>
+          </div>
+        </div>
+
+        <!-- Editor -->
+        <div id="page-editor" class="page">
+          <h2>✏️ 在线编辑</h2>
+          <div class="editor-toolbar">
+            <select id="editorFileSelect"><option value="">选择文章...</option></select>
+            <button onclick="loadArticle()" class="btn">加载</button>
+            <button onclick="saveArticle()" class="btn primary">保存</button>
+            <button onclick="deleteArticle()" class="btn danger">删除</button>
+          </div>
+          <textarea id="editorTextarea" placeholder="Markdown 内容..."></textarea>
+        </div>
+
+        <!-- Settings -->
+        <div id="page-settings" class="page">
+          <h2>⚙️ 服务设置</h2>
+          <div class="settings-form">
+            <label>项目名称</label>
+            <input type="text" id="cfgProject" />
+            <label>LLM 模型</label>
+            <input type="text" id="cfgLLMModel" />
+            <label>Embedding 模型</label>
+            <input type="text" id="cfgEmbedModel" />
+            <label>输出目录</label>
+            <input type="text" id="cfgOutput" />
+            <button onclick="loadConfig()" class="btn">读取配置</button>
+            <button onclick="saveConfig()" class="btn primary">保存配置</button>
+          </div>
+          <div class="model-discovery">
+            <h3>模型发现</h3>
+            <button onclick="discoverModels()" class="btn">扫描可用模型</button>
+            <pre id="modelDiscoveryResult"></pre>
+          </div>
+        </div>
+
+        <!-- About -->
+        <div id="page-about" class="page">
+          <h2>ℹ️ 关于</h2>
+          <div class="about-content">
+            <h3>sage-wiki-plus</h3>
+            <p>基于 <a href="https://github.com/xoai/sage-wiki" target="_blank">xoai/sage-wiki</a> 的定制增强版</p>
+            <p>LLM 编译的个人知识库 — 手机适配 WebUI，文件上传/在线编辑/服务配置</p>
+            <div id="aboutInfo"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
