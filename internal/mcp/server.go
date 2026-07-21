@@ -110,6 +110,17 @@ func (s *Server) ServeSSE(listenAddr, advertiseURL string) error {
 	return sseServer.Start(listenAddr)
 }
 
+// ServeStreamableHTTP starts the MCP server on Streamable HTTP transport.
+// This replaces outdated SSE with modern HTTP POST-based MCP.
+func (s *Server) ServeStreamableHTTP(listenAddr string) error {
+	defer s.db.Close()
+	httpServer := server.NewStreamableHTTPServer(s.mcp,
+		server.WithEndpointPath("/mcp"),
+		server.WithStateLess(true),
+	)
+	return httpServer.Start(listenAddr)
+}
+
 // Close cleans up resources.
 func (s *Server) Close() error {
 	return s.db.Close()

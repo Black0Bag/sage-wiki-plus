@@ -184,7 +184,7 @@ func init() {
 	compileCmd.Flags().Bool("prune", false, "Delete orphaned articles when their sole source is removed")
 
 	// Serve flags
-	serveCmd.Flags().String("transport", "stdio", "Transport: stdio or sse")
+	serveCmd.Flags().String("transport", "stdio", "Transport: stdio, sse, or streamable-http")
 	serveCmd.Flags().Int("port", 3333, "SSE/UI port")
 	serveCmd.Flags().Bool("ui", false, "Start web UI viewer")
 	serveCmd.Flags().String("bind", "127.0.0.1", "Bind address (default localhost only)")
@@ -488,6 +488,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	transport, _ := cmd.Flags().GetString("transport")
+	if transport == "streamable-http" {
+		port, _ := cmd.Flags().GetInt("port")
+		bind, _ := cmd.Flags().GetString("bind")
+		listenAddr := fmt.Sprintf("%s:%d", bind, port)
+		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on Streamable HTTP (%s)\n", listenAddr)
+		return srv.ServeStreamableHTTP(listenAddr)
+	}
 	if transport == "sse" {
 		port, _ := cmd.Flags().GetInt("port")
 		bind, _ := cmd.Flags().GetString("bind")
