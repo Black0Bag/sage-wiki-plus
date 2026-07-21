@@ -1,433 +1,615 @@
-// ===== Sage Wiki Plus — SPA =====
-'use strict';
+/* === Sage Wiki Plus — Cyber Sage UI === */
 
-const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-const app = $('#app');
-const toast = $('#toast');
+// ===================== API Client =====================
+const API = {
+  async fetch(url, opts = {}) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json', ...opts.headers },
+        ...opts,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('json')) return res.json();
+      return res;
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      throw new Error(`请求失败: ${e.message}`);
+    }
+  },
+  async tree() { return this.fetch('/api/tree'); },
+  async status() { return this.fetch('/api/status'); },
+  async article(path) { return this.fetch('/api/articles/' + encodeURI(path)); },
+  async search(q, limit = 20) { return this.fetch(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`); },
+  async graph() { return this.fetch('/api/graph'); },
+  async config() { return this.fetch('/api/config'); },
+  async saveConfig(cfg) { return this.fetch('/api/config', { method: 'PUT', body: JSON.stringify(cfg), headers: { 'Content-Type': 'application/json' } }); },
+  async sources() { return this.fetch('/api/sources'); },
+  async compile() { return this.fetch('/api/compile', { method: 'POST' }); },
+  async manifest() { return this.fetch('/api/manifest'); },
+  async health() { return this.fetch('/api/health'); },
+  async models() { return this.fetch('/api/models').catch(() => []); },
+  async provenance(path) { return this.fetch(`/api/provenance?path=${encodeURIComponent(path)}`).catch(() => null); },
+  async uploadSource(file) {
+    const form = new FormData();
+    form.append('file', file);
+    return this.fetch('/api/sources/upload', { method: 'POST', body: form });
+  },
+};
 
-let page = 'dashboard';
-let cache = {};
-
-// ---- API ---- //
-async function api(method, path, body) {
-  const opts = { method, headers: {} };
-  if (body && !(body instanceof FormData)) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
-  } else if (body instanceof FormData) {
-    opts.body = body;
-  }
-  const r = await fetch(path, opts);
-  const ct = r.headers.get('content-type') || '';
-  const isJson = ct.includes('json');
-  const data = isJson ? await r.json() : await r.text();
-  if (!r.ok) throw new Error(typeof data === 'object' ? (data.message || data.error || r.statusText) : data);
-  return data;
-}
-function get(path) { return api('GET', path); }
-function post(path, data) { return api('POST', path, data); }
-
-function msg(s) {
-  toast.textContent = s;
-  toast.classList.add('show');
-  clearTimeout(msg._t);
-  msg._t = setTimeout(() => toast.classList.remove('show'), 2500);
-}
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-function size(n) { if(n<1024) return n+'B'; if(n<1048576) return (n/1024).toFixed(1)+'KB'; return (n/1048576).toFixed(1)+'MB'; }
-function date(s) { try{return new Date(s).toLocaleDateString('zh-CN')}catch(e){return s} }
-
-// ---- Markdown renderer ---- //
-function md(html) {
-  return html
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+// ===================== Markdown Renderer =====================
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/^>- (.+)$/gm, '<blockquote><li>$1</li></blockquote>')
     .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
-    .replace(/^\|(.+)\|$/gm, function(m,row) {
-      const c = row.split('|').map(x=>x.trim()).filter(Boolean);
-      if (!c.length || /^-+$/.test(c[0])) return '';
-      return '<tr>'+c.map(x=>'<td>'+x+'</td>').join('')+'</tr>';
-    })
-    .replace(/((?:<tr>.*?<\/tr>\s*)+)/g, '<table>$1</table>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li value="$1">$2</li>')
     .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-    .replace(/((?:<li>.*?<\/li>\s*)+)/g, '<ul>$1</ul>')
-    .replace(/<\/ul>\s*<ul>/g,'')
+    .replace(/^---$/gm, '<hr>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-    .replace(/\n{2,}/g, '</p><p>')
-    .replace(/^(.+)$/gm, function(m){
-      if(/^<(\/)?(h[123]|pre|table|ul|ol|li|blockquote)/.test(m)||/^<table/.test(m)||!m.trim()) return m;
-      return m;
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, p, label) => {
+      const path = p.trim().replace(/\s+/g, '-').toLowerCase();
+      return `<a class="wikilink" onclick="navigate('/article/${encodeURIComponent(path)}')">${label || p.trim()}</a>`;
+    })
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+      const escaped = code.trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<pre${lang ? ` data-lang="${lang}"` : ''}><code>${escaped}</code></pre>`;
     });
+  html = html.replace(/((?:<li[^>]*>.*?<\/li>\n?)+)/g, '<ul>$1</ul>');
+  html = html.replace(/((?:<blockquote>.*?<\/blockquote>\n?)+)/g, '<blockquote>$1</blockquote>').replace(/<\/blockquote>\n?<blockquote>/g, '\n');
+  html = html.replace(/^\|(.+)\|$/gm, (m) => {
+    const cells = m.slice(1,-1).split('|').map(c => c.trim());
+    if (cells.every(c => /^[-:\s]+$/.test(c))) return '<tr class="sep">';
+    return `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
+  });
+  html = html.replace(/((?:<tr>.*?<\/tr>\n?)+)/g, '<table>$1</table>');
+  html = html.replace(/<tr class="sep">[\s\S]*?<\/tr>/g, '');
+  return html;
 }
 
-// ---- Router ---- //
-function navigate(name) {
-  if (name === page) return;
-  $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === name));
-  page = name;
-  render();
+// ===================== Toast =====================
+function toast(msg) {
+  const old = document.querySelector('.toast');
+  if (old) old.remove();
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 2000);
 }
 
-function render() {
-  switch(page) {
-    case 'dashboard': dashboard(); break;
-    case 'articles': articles(); break;
-    case 'search': search(); break;
-    case 'graph': graph(); break;
-    case 'upload': upload(); break;
-    case 'settings': settings(); break;
-  }
+// ===================== Router =====================
+function navigate(path) {
+  history.pushState(null, '', '#' + path);
+  route();
 }
+window.addEventListener('popstate', route);
 
-// ==================== DASHBOARD ==================== //
-async function dashboard() {
-  app.innerHTML = `
-    <div class="topbar"><h1>📊 仪表盘</h1><div class="sub">Sage Wiki Plus 知识库总览</div></div>
-    <div class="card"><div class="card-title">📈 统计</div><div class="stats" id="stats"><div class="spinner"></div></div></div>
-    <div class="card"><div class="card-title">📄 源文件 <span style="color:var(--fg3);font-weight:400;font-size:12px" id="srcCount"></span></div><div id="sources"><div class="spinner"></div></div></div>
-    <div class="card">
-      <div class="card-title">⚡ 快捷操作</div>
-      <div class="btn-group">
-        <button class="btn" onclick="doCompile()">🚀 编译</button>
-        <button class="btn btn-outline" onclick="navigate('upload')">📤 上传源文件</button>
-        <button class="btn btn-outline" onclick="navigate('articles')">📖 浏览文章</button>
-        <button class="btn btn-outline" onclick="navigate('graph')">🔗 知识图谱</button>
-      </div>
+// ===================== App Shell =====================
+function renderShell(content, title) {
+  return `
+    <nav id="mobile-nav">
+      <button class="nav-item${title === 'home' ? ' active' : ''}" onclick="navigate('/')"><span class="nav-icon">🏠</span>首页</button>
+      <button class="nav-item${title === 'browse' ? ' active' : ''}" onclick="navigate('/browse')"><span class="nav-icon">📂</span>浏览</button>
+      <button class="nav-item${title === 'search' ? ' active' : ''}" onclick="navigate('/search')"><span class="nav-icon">🔍</span>搜索</button>
+      <button class="nav-item${title === 'graph' ? ' active' : ''}" onclick="navigate('/graph')"><span class="nav-icon">🕸</span>图谱</button>
+      <button class="nav-item${title === 'more' ? ' active' : ''}" onclick="navigate('/sources')"><span class="nav-icon">⚙</span>管理</button>
+    </nav>
+    <div id="main">${content}</div>
+    <div id="sidebar-overlay" onclick="closeSidebar()"></div>
+    <div id="sidebar">
+      <div id="sidebar-search"><input placeholder="搜索文章…" onkeydown="if(event.key==='Enter'&&this.value.trim())navigate('/search?q='+encodeURIComponent(this.value.trim()))"></div>
+      <div id="sidebar-content"></div>
     </div>
-    <div id="compileStatus"></div>`;
+  `;
+}
+
+function skeleton(type) {
+  if (type === 'card') return '<div class="skel-card"></div>';
+  if (type === 'lines') return '<div class="skeleton skel-line"></div><div class="skeleton skel-line"></div><div class="skeleton skel-line"></div>';
+  if (type === 'ring') return '<div style="text-align:center;padding:20px"><div class="skeleton skel-ring"></div></div>';
+  return '<div class="loading"><div class="spinner"></div><span style="color:var(--fg3)">加载中…</span></div>';
+}
+
+// ===================== Ring Chart SVG =====================
+function ringChart(value, total, color, label) {
+  const r = 30, circ = 2 * Math.PI * r;
+  const pct = total > 0 ? Math.min(value / total, 1) : 0;
+  const offset = circ * (1 - pct);
+  return `
+    <div class="glass stat-ring">
+      <svg viewBox="0 0 72 72">
+        <circle class="ring-bg" cx="36" cy="36" r="${r}"/>
+        <circle class="ring-fg" cx="36" cy="36" r="${r}" stroke-dasharray="${circ}" stroke-dashoffset="${offset}" style="stroke:${color}"/>
+      </svg>
+      <div class="ring-value" style="color:${color}">${value}</div>
+      <div class="ring-label">${label}</div>
+    </div>
+  `;
+}
+
+// ===================== Pages =====================
+
+// --- Dashboard ---
+async function renderDashboard() {
+  document.getElementById('app').innerHTML = renderShell(skeleton('card') + skeleton('card'), 'home');
   try {
-    const [status, sources] = await Promise.all([get('/api/status'), get('/api/sources')]);
-    const s = $('#stats');
-    if(s) s.innerHTML = `
-      <div class="stat-item"><div class="val">${status.entries||0}</div><div class="lbl">条目</div></div>
-      <div class="stat-item"><div class="val">${status.entities||0}</div><div class="lbl">实体</div></div>
-      <div class="stat-item"><div class="val">${status.vectors||0}</div><div class="lbl">向量</div></div>
-      <div class="stat-item"><div class="val">${status.relations||0}</div><div class="lbl">关系</div></div>`;
-    const sc = $('#srcCount');
-    if(sc && sources.sources) sc.textContent = `(${sources.sources.length})`;
-    const sl = $('#sources');
-    if(sl && sources.sources) {
-      if(!sources.sources.length) {
-        sl.innerHTML = '<div class="empty"><span class="ico">📂</span><p>暂无源文件，上传或添加源文件开始构建知识库</p></div>';
-      } else {
-        sl.innerHTML = sources.sources.map(s => `
-          <div class="source-item"><span class="name">${esc(s.name)}</span><span class="size">${size(s.size)}</span></div>
-        `).join('');
-      }
-    }
-  } catch(e) {
-    const s = $('#stats'); if(s) s.innerHTML = `<div style="color:var(--red);font-size:14px">❌ ${esc(e.message)}</div>`;
-  }
-}
-
-async function doCompile() {
-  const btn = event.target;
-  btn.disabled = true; btn.textContent = '⏳ 编译中...';
-  const cs = $('#compileStatus');
-  if(cs) cs.innerHTML = '<div class="card"><div class="spinner"></div><div class="loading-text">正在编译，请稍候...</div></div>';
-  try {
-    const r = await post('/api/compile');
-    msg(r.message || '编译已启动');
-    setTimeout(() => { btn.disabled = false; btn.textContent = '🚀 编译'; if(cs) cs.innerHTML = ''; }, 2000);
-  } catch(e) {
-    msg('编译失败: '+e.message);
-    btn.disabled = false; btn.textContent = '🚀 编译';
-    if(cs) cs.innerHTML = '';
-  }
-}
-
-// ==================== ARTICLES ==================== //
-let treeData = null;
-let tabFilter = 'concepts';
-
-async function articles() {
-  app.innerHTML = `
-    <div class="topbar"><h1>📖 文章</h1><div class="sub">浏览 Wiki 知识库文章</div></div>
-    <div class="article-tab" id="tabs">
-      <button class="${tabFilter==='concepts'?'active':''}" data-tab="concepts">📝 概念</button>
-      <button class="${tabFilter==='summaries'?'active':''}" data-tab="summaries">📋 摘要</button>
-      <button class="${tabFilter==='sources'?'active':''}" data-tab="sources">📄 源文件</button>
-    </div>
-    <div id="articleList"><div class="spinner"></div></div>`;
-  $$('#tabs button').forEach(btn => btn.addEventListener('click', () => {
-    $$('#tabs button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    tabFilter = btn.dataset.tab;
-    renderArticleList();
-  }));
-  if (!treeData) {
-    try { treeData = await get('/api/tree'); } catch(e) { treeData = {concepts:[],summaries:[],sources:[]}; }
-  }
-  renderArticleList();
-}
-
-function renderArticleList() {
-  const items = treeData[tabFilter] || [];
-  const el = $('#articleList');
-  if (!el) return;
-  if (!items.length) {
-    el.innerHTML = '<div class="empty"><span class="ico">📭</span><p>暂无内容</p></div>';
-    return;
-  }
-  el.innerHTML = items.map(item => `
-    <div class="article-list-item" onclick="viewArticle('${esc(item.path)}')">
-      <div class="name">${esc(item.name)}</div>
-      ${item.type ? `<span class="tag">${esc(item.type)}</span>` : ''}
-    </div>
-  `).join('');
-}
-
-async function viewArticle(path) {
-  app.innerHTML = `
-    <div class="topbar">
-      <h1>📖 ${esc(path.split('/').pop().replace(/\.md$/,''))}</h1>
-      <div class="sub">${esc(path)}</div>
-    </div>
-    <div class="article-view">
-      <span class="back-link" onclick="articles()">← 返回文章列表</span>
-      <div class="card"><div class="article-content" id="articleContent"><div class="spinner"></div></div></div>
-    </div>`;
-  try {
-    if (!cache[path]) cache[path] = await get('/api/articles/'+encodeURIComponent(path));
-    const el = $('#articleContent');
-    if(el) el.innerHTML = '<div class="article-content">'+md(cache[path])+'</div>';
-  } catch(e) {
-    const el = $('#articleContent');
-    if(el) el.innerHTML = `<div style="color:var(--red);padding:12px">❌ ${esc(e.message)}</div>`;
-  }
-}
-
-// ==================== SEARCH ==================== //
-function search() {
-  app.innerHTML = `
-    <div class="topbar"><h1>🔍 搜索</h1><div class="sub">混合检索 Wiki 知识库</div></div>
-    <div class="search-bar">
-      <input id="q" type="text" placeholder="输入关键词搜索知识库..." autofocus>
-      <button onclick="doSearch()">搜索</button>
-    </div>
-    <div id="results"></div>`;
-  const q = $('#q');
-  if(q) { q.addEventListener('keydown', e => { if(e.key==='Enter') doSearch(); }); q.focus(); }
-}
-
-async function doSearch() {
-  const q = $('#q');
-  if (!q || !q.value.trim()) return;
-  const el = $('#results');
-  if (!el) return;
-  el.innerHTML = '<div class="spinner"></div>';
-  try {
-    const data = await post('/api/search', { query: q.value.trim(), limit: 20 });
-    const results = data.results || [];
-    if (!results.length) {
-      el.innerHTML = '<div class="empty"><span class="ico">🔍</span><p>没有找到匹配结果</p></div>';
-      return;
-    }
-    el.innerHTML = results.map(r => {
-      const tags = r.Tags ? r.Tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') : '';
-      const type = r.ID && r.ID.startsWith('concept:') ? '概念' : r.ID && r.ID.startsWith('raw/') ? '源文件' : '文章';
-      return `<div class="search-result" onclick="viewArticle('${esc(r.ID.replace(/^concept:/,'wiki/concepts/').replace(/^raw\//,'wiki/summaries/raw-'))}')">
-        <div class="title">${esc(r.Title || r.ID)}</div>
-        <div class="snippet">${esc((r.Content||'').slice(0,200))}</div>
-        <span class="badge">${type}</span>${tags}
-      </div>`;
-    }).join('');
-  } catch(e) {
-    el.innerHTML = `<div style="color:var(--red);padding:12px">❌ ${esc(e.message)}</div>`;
-  }
-}
-
-// ==================== GRAPH ==================== //
-async function graph() {
-  app.innerHTML = `
-    <div class="topbar"><h1>🔗 知识图谱</h1><div class="sub">Wiki 实体关系可视化</div></div>
-    <div class="card"><div class="card-title">🌐 实体关系图</div>
-      <div class="graph-container" id="graphContainer">
-        <div class="graph-placeholder" id="graphPlaceholder"><div class="spinner"></div></div>
-      </div>
-    </div>
-    <div class="card"><div class="card-title">📊 实体列表</div><div id="entityList"><div class="spinner"></div></div></div>`;
-  try {
-    const [graphData, listData] = await Promise.all([
-      get('/api/graph'),
-      get('/api/status')
+    const [status, health, tree] = await Promise.all([
+      API.status().catch(() => ({entities:0, relations:0, entries:0, dimensions:0})),
+      API.health().catch(() => ({})),
+      API.tree().catch(() => ({concepts:[], summaries:[], outputs:[], stats:{concepts:0, summaries:0}})),
     ]);
-    const gl = $('#graphPlaceholder');
-    if(gl) {
-      const nodes = graphData.nodes || [];
-      const edges = graphData.edges || [];
-      gl.innerHTML = `<div style="padding:12px;text-align:center">
-        <div style="font-size:32px;margin-bottom:6px">🔗</div>
-        <div style="font-size:14px;color:var(--fg2)">${nodes.length} 个实体, ${edges.length} 条关系</div>
-        <div style="font-size:12px;color:var(--fg3);margin-top:4px">${nodes.slice(0,20).map(n => `<span class="tag">${esc(n.name||n.id)}</span>`).join('')}</div>
-      </div>`;
-    }
-    const el = $('#entityList');
-    if(el && listData.entities) {
-      el.innerHTML = listData.entities.map(e => `
-        <div class="file-list-item">
-          <span><strong>${esc(e.name||e.id)}</strong> <span class="tag">${esc(e.type||'entity')}</span></span>
-          ${e.article_path ? `<button class="btn btn-sm btn-outline" onclick="viewArticle('${esc(e.article_path)}')">查看</button>` : ''}
-        </div>
-      `).join('');
-    } else if(el) {
-      el.innerHTML = '<div class="empty"><span class="ico">📊</span><p>暂无实体数据</p></div>';
-    }
-  } catch(e) {
-    const gl = $('#graphPlaceholder');
-    if(gl) gl.innerHTML = `<div style="color:var(--red);padding:12px">❌ ${esc(e.message)}</div>`;
+    const stats = tree.stats || {};
+    const concepts = stats.concepts || 0;
+    const summaries = stats.summaries || 0;
+    const entities = status.entities || 0;
+    const relations = status.relations || 0;
+    const total = Math.max(concepts + summaries, 1);
+
+    const recentItems = [...(tree.concepts || []), ...(tree.summaries || [])].slice(0, 5);
+
+    document.getElementById('app').innerHTML = renderShell(`
+      <div class="page-header">
+        <h1>${health.project || 'Sage Wiki'}</h1>
+        <p>${health.status === 'healthy' ? '系统运行正常' : '系统异常'} · ${health.version || ''}</p>
+        <div class="header-line"></div>
+      </div>
+
+      <div class="stats-grid">
+        ${ringChart(concepts, total, '#6c8dff', '概念文章')}
+        ${ringChart(summaries, total, '#a78bfa', '摘要文章')}
+        ${ringChart(entities, Math.max(entities,1), '#22d3ee', '知识实体')}
+        ${ringChart(relations, Math.max(relations,1), '#34d399', '实体关系')}
+      </div>
+
+      <div class="quick-actions">
+        <button class="quick-btn" onclick="navigate('/browse')">
+          <div class="qb-icon" style="background:rgba(108,141,255,0.12);color:var(--accent)">📂</div>
+          <div><div class="qb-text">浏览文章</div><div class="qb-sub">${concepts + summaries} 篇文章</div></div>
+        </button>
+        <button class="quick-btn" onclick="navigate('/search')">
+          <div class="qb-icon" style="background:rgba(167,139,250,0.12);color:var(--purple)">🔍</div>
+          <div><div class="qb-text">搜索知识库</div><div class="qb-sub">全文搜索</div></div>
+        </button>
+        <button class="quick-btn" onclick="navigate('/graph')">
+          <div class="qb-icon" style="background:rgba(34,211,238,0.12);color:var(--cyan)">🕸</div>
+          <div><div class="qb-text">知识图谱</div><div class="qb-sub">${entities} 实体 · ${relations} 关系</div></div>
+        </button>
+        <button class="quick-btn" onclick="navigate('/compile')">
+          <div class="qb-icon" style="background:rgba(52,211,153,0.12);color:var(--green)">⚡</div>
+          <div><div class="qb-text">触发编译</div><div class="qb-sub">更新知识库</div></div>
+        </button>
+      </div>
+
+      ${recentItems.length ? `
+      <div class="recent-section">
+        <div class="section-title">最近文章</div>
+        ${recentItems.map(item => `
+          <div class="recent-item" onclick="navigate('/article/${encodeURIComponent(item.path)}')">
+            <div class="ri-dot" style="background:${item.path.includes('concept') ? 'var(--accent)' : 'var(--purple)'}"></div>
+            <div class="ri-title">${item.name}</div>
+            <div class="ri-meta">${item.path.split('/')[0]}</div>
+          </div>
+        `).join('')}
+      </div>` : '<div class="empty-state">暂无文章，请先添加源文件并编译</div>'}
+    `, 'home');
+  } catch (e) {
+    document.getElementById('app').innerHTML = renderShell(`<div class="error-state">❌ 加载失败: ${e.message}</div>`);
   }
 }
 
-// ==================== UPLOAD ==================== //
-function upload() {
-  app.innerHTML = `
-    <div class="topbar"><h1>📤 上传源文件</h1><div class="sub">上传文本文件作为 Wiki 知识源</div></div>
-    <div class="card">
-      <div class="card-title">📎 选择文件</div>
-      <div class="upload-zone" id="dropZone">
-        <span class="ico">📄</span>
-        <div class="hint">点击选择文件 或 拖拽文件到此处</div>
-        <div style="font-size:11px;color:var(--fg3);margin-top:6px">支持 .txt .md 等文本格式，最大 50MB</div>
+// --- Browse ---
+async function renderBrowse() {
+  document.getElementById('app').innerHTML = renderShell(skeleton('lines'), 'browse');
+  try {
+    const data = await API.tree();
+    const concepts = data.concepts || [];
+    const summaries = data.summaries || [];
+    document.getElementById('app').innerHTML = renderShell(`
+      <div class="page-header"><h1>浏览文章</h1><p>浏览知识库中的全部文章</p><div class="header-line"></div></div>
+      <div class="tree-group">
+        <div class="tree-group-title">📝 概念文章 <span class="tgt-count">${concepts.length}</span></div>
+        ${concepts.length ? concepts.map(c => `
+          <button class="tree-item" onclick="navigate('/article/${encodeURIComponent(c.path)}')">
+            <span class="ti-icon">📄</span> ${c.name}
+          </button>
+        `).join('') : '<div class="empty-state">暂无概念文章</div>'}
       </div>
-      <input type="file" id="fileInput" accept=".txt,.md,.json,.yaml,.yml,.csv,.html,.css,.js,.py,.go,.ts,.jsx,.tsx" style="display:none">
-      <div class="upload-progress" id="progress" style="display:none">
-        <div class="bar-wrap"><div class="bar" id="progressBar"></div></div>
-        <div class="label" id="progressLabel">上传中...</div>
+      <div class="tree-group">
+        <div class="tree-group-title">📋 摘要文章 <span class="tgt-count">${summaries.length}</span></div>
+        ${summaries.length ? summaries.map(s => `
+          <button class="tree-item" onclick="navigate('/article/${encodeURIComponent(s.path)}')">
+            <span class="ti-icon">📋</span> ${s.name}
+          </button>
+        `).join('') : '<div class="empty-state">暂无摘要文章</div>'}
       </div>
+    `, 'browse');
+  } catch (e) {
+    document.getElementById('app').innerHTML = renderShell(`<div class="error-state">❌ ${e.message}</div>`);
+  }
+}
+
+// --- Article ---
+async function renderArticle(articlePath) {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="top-bar"><button class="back-btn" onclick="history.back()">←</button></div>
+    ${skeleton('lines')}${skeleton('lines')}
+  `, 'browse');
+  try {
+    const article = await API.article(articlePath);
+    const body = article.body || '';
+    const fm = article.frontmatter || {};
+    const title = fm.title || decodeURIComponent(articlePath.split('/').pop() || '').replace(/\.md$/i,'') || '无标题';
+
+    const headers = body.match(/^#{2,3}\s.+$/gm) || [];
+    const toc = headers.map(h => {
+      const level = h.startsWith('### ') ? 'h3' : 'h2';
+      const text = h.replace(/^#+\s/, '');
+      return `<a class="toc-${level}" href="#${text.toLowerCase().replace(/[^\w\u4e00-\u9fff]+/g, '-')}">${text}</a>`;
+    }).join('');
+
+    let processedBody = body;
+    processedBody = processedBody.replace(/\s\{#[^}]+\}/g, '');
+
+    document.getElementById('app').innerHTML = renderShell(`
+      <div class="top-bar"><button class="back-btn" onclick="history.back()">←</button><span style="color:var(--fg3);font-size:0.82rem">${articlePath}</span></div>
+      <div class="article-title">${title}</div>
+      <div class="article-meta">
+        ${fm.tags ? `<span>标签: ${fm.tags.split(',').map(t => `<span class="am-tag">${t.trim()}</span>`).join(' ')}</span>` : ''}
+        ${fm.author ? `<span>作者: ${fm.author}</span>` : ''}
+        ${fm.date ? `<span>${fm.date}</span>` : ''}
+      </div>
+      ${toc ? `<div class="toc"><div class="toc-title">📑 目录</div>${toc}</div>` : ''}
+      <div class="article-body">${renderMarkdown(processedBody)}</div>
+    `, 'browse');
+  } catch (e) {
+    document.getElementById('app').innerHTML = renderShell(`
+      <div class="top-bar"><button class="back-btn" onclick="history.back()">←</button></div>
+      <div class="error-state">❌ 加载失败: ${e.message}</div>
+    `);
+  }
+}
+
+// --- Search ---
+async function renderSearch(q) {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="page-header"><h1>搜索</h1><p>全文搜索知识库内容</p><div class="header-line"></div></div>
+    <div class="search-box">
+      <input id="search-input" placeholder="输入关键词…" value="${q || ''}" onkeydown="if(event.key==='Enter'&&this.value.trim()){window._doSearch(this.value.trim())}" autofocus>
+      <button class="btn btn-primary" onclick="var i=document.getElementById('search-input');if(i.value.trim())window._doSearch(i.value.trim())">搜索</button>
     </div>
-    <div class="card"><div class="card-title">📄 已上传源文件</div><div id="uploadedFiles"><div class="spinner"></div></div></div>`;
-  const dropZone = $('#dropZone');
-  const fileInput = $('#fileInput');
-  if(dropZone && fileInput) {
-    dropZone.addEventListener('click', () => fileInput.click());
-    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-    dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); if(e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]); });
-    fileInput.addEventListener('change', () => { if(fileInput.files.length) uploadFile(fileInput.files[0]); });
-  }
-  loadUploadedFiles();
+    <div id="search-results"></div>
+  `, 'search');
+
+  window._doSearch = async (query) => {
+    navigate('/search?q=' + encodeURIComponent(query));
+    const el = document.getElementById('search-results');
+    if (!el) return;
+    el.innerHTML = '<div class="loading"><div class="spinner"></div>搜索中…</div>';
+    try {
+      const data = await API.search(query);
+      const hits = data.results || data.hits || [];
+      if (!hits || !hits.length) {
+        el.innerHTML = '<div class="empty-state">未找到匹配结果</div>';
+        return;
+      }
+      el.innerHTML = hits.map(h => {
+        const path = h.path || '';
+        const escapedPath = encodeURIComponent(path);
+        return `<div class="search-hit"${path ? ` onclick="navigate('/article/${escapedPath}')"` : ''}>
+          <div class="hit-title">${h.title || h.id || path}</div>
+          <div class="hit-snippet">${h.snippet || h.excerpt || ''}</div>
+          ${path ? `<div class="hit-path">${path}</div>` : ''}
+        </div>`;
+      }).join('');
+    } catch(e) {
+      el.innerHTML = `<div class="error-state">❌ ${e.message}</div>`;
+    }
+  };
+
+  if (q) window._doSearch(q);
 }
 
-async function uploadFile(file) {
-  if(file.size > 50*1024*1024) { msg('文件超过50MB限制'); return; }
-  const progress = $('#progress');
-  const bar = $('#progressBar');
-  const label = $('#progressLabel');
-  if(progress) progress.style.display = 'block';
-  if(bar) bar.style.width = '30%';
-  if(label) label.textContent = `正在上传 ${file.name}...`;
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const r = await fetch('/api/sources/upload', { method:'POST', body:fd });
-    const data = await r.json();
-    if(!r.ok) throw new Error(data.error || data.message || r.statusText);
-    if(bar) bar.style.width = '100%';
-    if(label) label.textContent = `✅ ${data.filename} 上传成功 (${size(data.size)})`;
-    msg(data.message || '上传成功');
-    setTimeout(() => { if(progress) progress.style.display = 'none'; }, 2000);
-    loadUploadedFiles();
-  } catch(e) {
-    if(bar) bar.style.width = '0%';
-    if(label) label.textContent = `❌ 上传失败: ${e.message}`;
-    msg('上传失败: '+e.message);
-  }
-}
+// --- Graph ---
+async function renderGraph() {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="page-header"><h1>知识图谱</h1><p>知识实体关系可视化</p><div class="header-line"></div></div>
+    <div class="graph-controls" id="graph-controls"></div>
+    <div id="graph-container"><div class="loading"><div class="spinner"></div>加载图谱…</div></div>
+  `, 'graph');
 
-async function loadUploadedFiles() {
-  const el = $('#uploadedFiles');
-  if(!el) return;
   try {
-    const data = await get('/api/sources');
-    const sources = data.sources || [];
-    if(!sources.length) {
-      el.innerHTML = '<div class="empty"><span class="ico">📂</span><p>暂无源文件</p></div>';
+    const data = await API.graph();
+    const nodes = data.nodes || [];
+    const edges = data.edges || [];
+
+    if (!nodes.length) {
+      document.getElementById('graph-container').innerHTML = '<div class="empty-state">暂无图谱数据，请先编译知识库</div>';
       return;
     }
-    el.innerHTML = sources.map(s => `
-      <div class="file-list-item">
-        <span>${esc(s.name)} <span style="color:var(--fg3);font-size:12px">${size(s.size)}</span></span>
-        <span style="color:var(--fg3);font-size:12px">${date(s.mod_time)}</span>
+
+    const positions = {};
+    const center = { x: 0, y: 0 };
+    nodes.forEach((n, i) => {
+      const angle = (2 * Math.PI * i) / nodes.length;
+      const radius = 80 + Math.random() * 40;
+      positions[n.id] = { x: Math.cos(angle) * radius + Math.random() * 20, y: Math.sin(angle) * radius + Math.random() * 20 };
+    });
+
+    const adj = {};
+    edges.forEach(e => {
+      (adj[e.source] = adj[e.source] || []).push(e.target);
+      (adj[e.target] = adj[e.target] || []).push(e.source);
+    });
+    const deg = {};
+    Object.keys(adj).forEach(id => { deg[id] = adj[id].length; });
+
+    for (let iter = 0; iter < 50; iter++) {
+      nodes.forEach(n => {
+        const p = positions[n.id];
+        if (!p) return;
+        nodes.forEach(other => {
+          if (other.id === n.id) return;
+          const op = positions[other.id];
+          if (!op) return;
+          const dx = p.x - op.x, dy = p.y - op.y;
+          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          const force = 500 / (dist * dist);
+          p.x += (dx / dist) * force;
+          p.y += (dy / dist) * force;
+        });
+        (adj[n.id] || []).forEach(target => {
+          const tp = positions[target];
+          if (!tp) return;
+          const dx = tp.x - p.x, dy = tp.y - p.y;
+          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          p.x += (dx / dist) * 0.05;
+          p.y += (dy / dist) * 0.05;
+        });
+        p.x += (center.x - p.x) * 0.005;
+        p.y += (center.y - p.y) * 0.005;
+      });
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    nodes.forEach(n => { const p = positions[n.id]; if (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); } });
+    const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+
+    const typeColors = { concept: '#6c8dff', technique: '#a78bfa', source: '#4a5070', artifact: '#fbbf24', person: '#f472b6', entity: '#22d3ee', default: '#6c8dff' };
+
+    const types = [...new Set(nodes.map(n => n.type || 'default'))];
+    const controlsEl = document.getElementById('graph-controls');
+    if (controlsEl) {
+      controlsEl.innerHTML = types.map(t => `<button class="gc-btn active" data-type="${t}" onclick="toggleGraphType(this)">${t}</button>`).join('');
+    }
+    window.toggleGraphType = (btn) => {
+      btn.classList.toggle('active');
+      renderGraphNodes();
+    };
+
+    function renderGraphNodes() {
+      const activeTypes = [...document.querySelectorAll('.gc-btn.active')].map(b => b.dataset.type);
+      const filtered = nodes.filter(n => activeTypes.includes(n.type || 'default'));
+      const fIds = new Set(filtered.map(n => n.id));
+      const fEdges = edges.filter(e => fIds.has(e.source) && fIds.has(e.target));
+
+      let svg = `<svg width="100%" height="100%" viewBox="-200 -200 400 400" style="background:transparent">`;
+      fEdges.forEach(e => {
+        const sp = positions[e.source], tp = positions[e.target];
+        if (!sp || !tp) return;
+        const sx = (sp.x - minX) / rangeX * 360 - 180, sy = (sp.y - minY) / rangeY * 360 - 180;
+        const tx = (tp.x - minX) / rangeX * 360 - 180, ty = (tp.y - minY) / rangeY * 360 - 180;
+        svg += `<line x1="${sx}" y1="${sy}" x2="${tx}" y2="${ty}" stroke="rgba(108,141,255,0.12)" stroke-width="1"/>`;
+      });
+      filtered.forEach(n => {
+        const p = positions[n.id]; if (!p) return;
+        const cx = (p.x - minX) / rangeX * 360 - 180, cy = (p.y - minY) / rangeY * 360 - 180;
+        const d = deg[n.id] || 0;
+        const size = Math.max(5, Math.min(14, 5 + d * 2));
+        const color = typeColors[n.type] || typeColors.default;
+        const label = (n.name || n.label || n.id);
+        const shortLabel = label.length > 10 ? label.slice(0, 10) + '…' : label;
+        svg += `<circle cx="${cx}" cy="${cy}" r="${size}" fill="${color}" opacity="0.85" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" style="cursor:pointer" onmouseover="this.setAttribute('r',${size+3})" onmouseout="this.setAttribute('r',${size})" onclick="navigate('/article/${encodeURIComponent(n.path || n.id)}')"/>`;
+        if (size > 6) {
+          svg += `<text x="${cx}" y="${cy + size + 10}" text-anchor="middle" class="node-label">${shortLabel}</text>`;
+        }
+      });
+      svg += '</svg>';
+      const container = document.getElementById('graph-container');
+      if (container) container.innerHTML = svg;
+    }
+
+    renderGraphNodes();
+  } catch (e) {
+    const container = document.getElementById('graph-container');
+    if (container) container.innerHTML = `<div class="error-state">❌ ${e.message}</div>`;
+  }
+}
+
+// --- Sources ---
+async function renderSources() {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="page-header"><h1>源文件管理</h1><p>上传和管理知识库源文件</p><div class="header-line"></div></div>
+    <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+      <div class="upload-icon">📤</div>
+      <div><strong>点击上传文件</strong></div>
+      <div style="font-size:0.82rem;margin-top:4px">支持 .md .txt .pdf 等格式</div>
+      <input type="file" id="file-input" style="display:none" onchange="uploadFile(this.files[0])">
+    </div>
+    <div id="sources-list"><div class="loading"><div class="spinner"></div>加载源文件…</div></div>
+  `, 'more');
+
+  window.uploadFile = async (file) => {
+    if (!file) return;
+    toast('上传中…');
+    try {
+      await API.uploadSource(file);
+      toast('✅ 上传成功');
+      renderSources();
+    } catch (e) {
+      toast('❌ ' + e.message);
+    }
+  };
+
+  try {
+    const data = await API.sources();
+    const srcList = data.sources || data.files || data || [];
+    const listEl = document.getElementById('sources-list');
+    if (!listEl) return;
+    if (!srcList.length) {
+      listEl.innerHTML = '<div class="empty-state">暂无源文件，点击上方区域上传</div>';
+      return;
+    }
+    listEl.innerHTML = (Array.isArray(srcList) ? srcList : []).map(s => `
+      <div class="source-item">
+        <div>
+          <div class="source-name">${s.name || (s.path ? s.path.split('/').pop() : '未知')}</div>
+          <div class="source-path">${s.path || ''}</div>
+        </div>
+        <div style="text-align:right">
+          ${s.size ? `<div class="source-size">${(s.size/1024).toFixed(1)} KB</div>` : ''}
+        </div>
       </div>
     `).join('');
-  } catch(e) {
-    el.innerHTML = `<div style="color:var(--red);padding:12px">❌ ${esc(e.message)}</div>`;
+  } catch (e) {
+    const listEl = document.getElementById('sources-list');
+    if (listEl) listEl.innerHTML = `<div class="error-state">❌ ${e.message}</div>`;
   }
 }
 
-// ==================== SETTINGS ==================== //
-async function settings() {
-  app.innerHTML = `
-    <div class="topbar"><h1>⚙️ 设置</h1><div class="sub">Wiki 配置管理</div></div>
-    <div class="card"><div id="settingsForm"><div class="spinner"></div></div></div>
-    <div class="card">
-      <div class="card-title">ℹ️ 服务信息</div>
-      <div id="serverInfo"><div class="spinner"></div></div>
-    </div>`;
-  try {
-    const [cfg, health] = await Promise.all([get('/api/config'), get('/api/health')]);
-    const sf = $('#settingsForm');
-    if(sf) sf.innerHTML = `
-      <div class="card-title">🔧 基本设置</div>
-      <div class="form-group"><label>项目名称</label><input id="cfgProject" value="${esc(cfg.Project||'sage-wiki')}"></div>
-      <div class="form-group"><label>输出目录</label><input id="cfgOutput" value="${esc(cfg.Output||'wiki')}"></div>
-      <div class="form-group"><label>LLM 模型</label><input id="cfgLlm" value="${esc(cfg.Models?.Summarize||cfg.Model||'')}"></div>
-      <div class="form-group"><label>Embedding 模型</label><input id="cfgEmbed" value="${esc(cfg.Embed?.Model||'')}"></div>
-      <div class="form-group"><label>语言</label>
-        <select id="cfgLang">
-          <option value="Chinese" ${cfg.Language==='Chinese'?'selected':''}>中文</option>
-          <option value="English" ${cfg.Language==='English'?'selected':''}>English</option>
-        </select>
+// --- Settings ---
+async function renderSettings() {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="page-header"><h1>设置</h1><p>知识库配置管理</p><div class="header-line"></div></div>
+    <div class="config-editor">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px">
+        <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存</button>
+        <button class="btn btn-sm" onclick="renderSettings()">↻ 重置</button>
       </div>
-      <div class="btn-group">
-        <button class="btn" onclick="saveConfig()">💾 保存设置</button>
-        <button class="btn btn-outline" onclick="dashboard()">← 返回仪表盘</button>
-      </div>`;
-    const si = $('#serverInfo');
-    if(si) si.innerHTML = `
-      <div style="font-size:13px;line-height:1.8">
-        <div><strong>版本</strong> <span style="color:var(--fg2)">${esc(health.version||'sage-wiki-plus')}</span></div>
-        <div><strong>项目</strong> <span style="color:var(--fg2)">${esc(health.project||'-')}</span></div>
-        <div><strong>语言</strong> <span style="color:var(--fg2)">${esc(health.language||'Chinese')}</span></div>
-        <div><strong>状态</strong> <span style="color:${health.status==='healthy'?'var(--green)':'var(--red)'}">${esc(health.status||'unknown')}</span></div>
-      </div>`;
-  } catch(e) {
-    const sf = $('#settingsForm');
-    if(sf) sf.innerHTML = `<div style="color:var(--red)">❌ 加载失败: ${esc(e.message)}</div>`;
+      <textarea id="config-editor">${skeleton('lines')}</textarea>
+    </div>
+  `, 'more');
+
+  try {
+    const cfg = await API.config();
+    const editor = document.getElementById('config-editor');
+    if (editor) editor.value = JSON.stringify(cfg, null, 2);
+  } catch (e) {
+    const editor = document.getElementById('config-editor');
+    if (editor) editor.value = '// 加载配置失败: ' + e.message;
+  }
+
+  window.saveConfig = async () => {
+    const editor = document.getElementById('config-editor');
+    if (!editor) return;
+    try {
+      const cfg = JSON.parse(editor.value);
+      await API.saveConfig(cfg);
+      toast('✅ 配置已保存');
+    } catch (e) {
+      toast('❌ ' + e.message);
+    }
+  };
+}
+
+// --- Compile ---
+async function renderCompile() {
+  document.getElementById('app').innerHTML = renderShell(`
+    <div class="page-header"><h1>编译</h1><p>触发知识库编译并查看状态</p><div class="header-line"></div></div>
+    <div class="glass" style="padding:20px;text-align:center;margin-bottom:16px">
+      <div style="font-size:2rem;margin-bottom:8px">⚡</div>
+      <button class="btn btn-primary" onclick="triggerCompile()" id="compile-btn">🚀 触发编译</button>
+      <div id="compile-status" style="margin-top:12px"></div>
+    </div>
+    <div class="glass" style="padding:16px">
+      <div style="font-size:0.82rem;font-weight:600;color:var(--fg2);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">📋 编译清单</div>
+      <div id="manifest"><div class="loading"><div class="spinner"></div>加载清单…</div></div>
+    </div>
+  `, 'more');
+
+  window.triggerCompile = async () => {
+    const btn = document.getElementById('compile-btn');
+    const status = document.getElementById('compile-status');
+    if (!btn || !status) return;
+    btn.disabled = true;
+    btn.textContent = '⏳ 编译中…';
+    status.innerHTML = '<div class="progress-bar"><div class="pb-fill" style="width:30%"></div></div><span style="color:var(--fg3);font-size:0.82rem">正在编译…</span>';
+    try {
+      await API.compile();
+      status.innerHTML = `<span style="color:var(--green)">✅ 编译完成</span>`;
+      toast('✅ 编译成功');
+    } catch (e) {
+      status.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🚀 触发编译';
+    }
+  };
+
+  try {
+    const manifest = await API.manifest();
+    const el = document.getElementById('manifest');
+    if (!el) return;
+    if (!manifest) {
+      el.innerHTML = '<div class="empty-state">暂无编译记录</div>';
+      return;
+    }
+    const items = manifest.articles || manifest.items || manifest.entries || [];
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-state">暂无文章</div>';
+      return;
+    }
+    el.innerHTML = items.map(item => `
+      <div class="source-item">
+        <div>
+          <div class="source-name">${item.title || item.path || item.id}</div>
+          <div class="source-path">${item.path || ''}</div>
+        </div>
+        <div><span class="badge" style="background:rgba(52,211,153,0.15);color:var(--green)">已编译</span></div>
+      </div>
+    `).join('');
+  } catch (e) {
+    const el = document.getElementById('manifest');
+    if (el) el.innerHTML = `<div class="error-state">❌ ${e.message}</div>`;
   }
 }
 
-async function saveConfig() {
-  const data = {};
-  const p = $('#cfgProject'); if(p) data.project = p.value;
-  const o = $('#cfgOutput'); if(o) data.output = o.value;
-  const l = $('#cfgLlm'); if(l) data.llm_model = l.value;
-  const e = $('#cfgEmbed'); if(e) data.embedding_model = e.value;
-  const lang = $('#cfgLang'); if(lang) data.language = lang.value;
-  try {
-    const r = await post('/api/config', data);
-    msg('设置已保存');
-  } catch(e) { msg('保存失败: '+e.message); }
+// ===================== Route Handler =====================
+function route() {
+  const hash = window.location.hash.slice(1) || '/';
+  const [basePath, ...rest] = hash.split('?');
+  const searchParams = new URLSearchParams(rest.join('?'));
+  const path = basePath;
+
+  if (path === '/' || path === '') { renderDashboard(); return; }
+  if (path === '/browse') { renderBrowse(); return; }
+  if (path === '/search') {
+    const q = searchParams.get('q') || '';
+    renderSearch(q);
+    return;
+  }
+  if (path === '/graph') { renderGraph(); return; }
+  if (path === '/sources') { renderSources(); return; }
+  if (path === '/settings') { renderSettings(); return; }
+  if (path === '/compile') { renderCompile(); return; }
+  if (path.startsWith('/article/')) {
+    const articlePath = decodeURIComponent(path.slice(9));
+    renderArticle(articlePath);
+    return;
+  }
+  const app = document.getElementById('app');
+  if (app) app.innerHTML = renderShell('<div class="error-state">❌ 页面未找到</div>');
 }
 
-// ==================== COMPILE STATUS POLL ==================== //
-// (optional - manual compile via dashboard)
-
-// ==================== INIT ==================== //
-document.addEventListener('DOMContentLoaded', () => {
-  $$('.nav-item').forEach(el => {
-    el.addEventListener('click', () => navigate(el.dataset.page));
-  });
-  // Initial render
-  render();
-});
+// ===================== Init =====================
+document.addEventListener('DOMContentLoaded', route);
