@@ -269,7 +269,12 @@ func (s *WebServer) handleArticle(w http.ResponseWriter, r *http.Request) {
 		articlePath += ".md"
 	}
 
-	absPath := filepath.Join(s.projectDir, s.cfg.Output, articlePath)
+	var absPath string
+	if strings.HasPrefix(articlePath, "raw/") {
+		absPath = filepath.Join(s.projectDir, articlePath)
+	} else {
+		absPath = filepath.Join(s.projectDir, s.cfg.Output, articlePath)
+	}
 
 	// Path traversal protection
 	absProject, _ := filepath.Abs(s.projectDir)

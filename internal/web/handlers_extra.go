@@ -64,6 +64,16 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 				newCfg.Language = s
 			}
 		}
+		if v, ok := updates["api_key"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.API.APIKey = s
+			}
+		}
+		if v, ok := updates["api_base"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.API.BaseURL = s
+			}
+		}
 		if err := newCfg.Save(cfgPath); err != nil {
 			http.Error(w, "config save error", http.StatusInternalServerError)
 			return
@@ -195,6 +205,47 @@ func (s *WebServer) handleCompile(w http.ResponseWriter, r *http.Request) {
 // ---------- 模型发现 ----------
 
 func (s *WebServer) handleModels(w http.ResponseWriter, r *http.Request) {
+	// Fetch models from provider when ?fetch=true
+	if r.URL.Query().Get("fetch") == "true" {
+		if s.cfg.API.BaseURL == "" || s.cfg.API.APIKey == "" {
+			http.Error(w, "API base URL and key not configured", http.StatusBadRequest)
+			return
+		}
+		baseURL := strings.TrimRight(s.cfg.API.BaseURL, "/")
+		modelsURL := baseURL + "/models"
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
+		if err != nil {
+			http.Error(w, "create request: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+s.cfg.API.APIKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "fetch models: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "read response: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(body, &result); err != nil {
+			http.Error(w, "parse response: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, result)
+		return
+	}
+
+	// Return configured models (original behavior)
 	models := map[string]any{
 		"configured": map[string]string{
 			"llm":       s.cfg.Models.Summarize,
