@@ -70,7 +70,7 @@ fun FilesTab(sources: List<SourceInfo>, loading: Boolean, error: String?, status
                 StatChip("Vectors ${s.vectors}")
                 StatChip("Relations ${s.relations}")
             }
-            HorizontalDivider()
+            Divider()
         }
         when {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -99,7 +99,7 @@ fun FilesTab(sources: List<SourceInfo>, loading: Boolean, error: String?, status
                             Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    HorizontalDivider(Modifier.padding(start = 52.dp))
+                    Divider(Modifier.padding(start = 52.dp))
                 }
             }
         }
