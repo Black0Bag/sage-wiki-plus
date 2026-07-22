@@ -2,8 +2,6 @@ package com.sagewiki.client.data
 
 import com.google.gson.annotations.SerializedName
 
-// === API Response Models ===
-
 data class StatusResponse(
     val project: String? = null,
     val entries: Int = 0,
@@ -53,7 +51,6 @@ data class ConfigResponse(
     val output: String? = null,
     val llm: LlmConfig? = null,
     val embed: EmbedConfig? = null,
-    // catch any extra fields
     val extras: Map<String, Any>? = null
 )
 

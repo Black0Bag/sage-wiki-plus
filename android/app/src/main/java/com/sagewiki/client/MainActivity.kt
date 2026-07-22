@@ -1,8 +1,7 @@
 package com.sagewiki.client
 
-import android.content.Intent
+import android.content.Context
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -11,188 +10,126 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
-import androidx.lifecycle.ViewModelProvider
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
-import com.sagewiki.client.ui.theme.SageWikiTheme
+import androidx.compose.ui.platform.LocalContext
+import com.sagewiki.client.data.*
 import com.sagewiki.client.ui.screens.*
-import com.sagewiki.client.viewmodel.AppViewModel
+import com.sagewiki.client.ui.theme.SageWikiTheme
 import kotlinx.coroutines.launch
-import java.net.URLEncoder
 
 class MainActivity : ComponentActivity() {
-    private lateinit var viewModel: AppViewModel
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-
-        viewModel = ViewModelProvider(this)[AppViewModel::class.java]
-        viewModel.init(applicationContext)
-
-        handleShareIntent(intent)
-
-        setContent {
-            SageWikiTheme {
-                MainContent(viewModel = viewModel)
-            }
-        }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleShareIntent(intent)
-    }
-
-    private fun handleShareIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND) {
-            val type = intent.type
-            when {
-                type?.startsWith("text/plain") == true -> {
-                    val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-                    val sharedTitle = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: "匿名分享"
-                    if (sharedText != null) {
-                        viewModel.shareContent(sharedTitle, sharedText, null)
-                    }
-                }
-                type?.startsWith("image/") == true -> {
-                    Toast.makeText(this, "图片分享正在开发中", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+        setContent { SageWikiTheme { SageWikiApp() } }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainContent(viewModel: AppViewModel) {
-    val state by viewModel.state.collectAsState()
-    val navController = rememberNavController()
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
+fun SageWikiApp() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("sage_wiki", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
 
-    if (!state.isConfigured) {
-        SetupScreen(
-            state = state,
-            onServerUrlChange = { viewModel.setServerUrl(it) },
-            onTokenChange = { viewModel.setToken(it) },
-            onConnect = { viewModel.connect() }
-        )
-    } else {
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
-                ModalDrawerSheet {
-                    Spacer(Modifier.height(NavigationDrawerItemDefaults.ItemPadding.calculateTopPadding()))
-                    Text(
-                        "SageWiki",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        modifier = Modifier.padding(16.dp)
-                    )
-                    Divider()
+    var serverUrl by remember { mutableStateOf(prefs.getString("url", "") ?: "") }
+    var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
+    var isConfigured by remember { mutableStateOf(prefs.getBoolean("configured", false)) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf<StatusResponse?>(null) }
+    var sources by remember { mutableStateOf<List<SourceInfo>>(emptyList()) }
+    var currentArticle by remember { mutableStateOf<ArticleResponse?>(null) }
+    var articleLoading by remember { mutableStateOf(false) }
+    var config by remember { mutableStateOf<ConfigResponse?>(null) }
+    var configLoaded by remember { mutableStateOf(false) }
+    var showDetail by remember { mutableStateOf(false) }
+    var showPassword by remember { mutableStateOf(false) }
+    var refreshTrigger by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(0) }
 
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                        label = { Text("源文件列表") },
-                        selected = true,
-                        onClick = {
-                            navController.navigate("files") {
-                                popUpTo("files") { inclusive = true }
-                            }
-                            scope.launch { drawerState.close() }
-                        }
-                    )
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                        label = { Text("服务器配置") },
-                        selected = false,
-                        onClick = {
-                            navController.navigate("server")
-                            scope.launch { drawerState.close() }
-                        }
-                    )
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Tune, contentDescription = null) },
-                        label = { Text("App 设置") },
-                        selected = false,
-                        onClick = {
-                            navController.navigate("settings")
-                            scope.launch { drawerState.close() }
-                        }
-                    )
-                    Divider(modifier = Modifier.padding(vertical = 8.dp))
-                    Text(
-                        "v${state.appVersion}",
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+    val api = remember(serverUrl.trim(), token) {
+        SageWikiApi(serverUrl.trim(), token.ifBlank { null })
+    }
+
+    LaunchedEffect(isConfigured, refreshTrigger) {
+        if (isConfigured) {
+            loading = true; error = null
+            api.status().onSuccess { status = it }
+            api.listSources().onSuccess { resp -> sources = resp.sources }
+            loading = false
+        }
+    }
+
+    if (!isConfigured) {
+        SetupScreen(serverUrl, token, loading, error, showPassword,
+            onUrlChange = { serverUrl = it },
+            onTokenChange = { token = it },
+            onTogglePassword = { showPassword = !showPassword },
+            onConnect = {
+                loading = true; error = null
+                scope.launch {
+                    api.health().onSuccess { resp ->
+                        if (resp.status == "ok") {
+                            prefs.edit().putString("url", serverUrl.trim()).putString("token", token).putBoolean("configured", true).apply()
+                            isConfigured = true
+                        } else error = "Server: ${resp.message}"
+                    }.onFailure { e -> error = e.localizedMessage ?: "Connection failed" }
+                    loading = false
                 }
             }
-        ) {
-            NavHost(
-                navController = navController,
-                startDestination = "files"
-            ) {
-                composable("files") {
-                    LaunchedEffect(Unit) {
-                        viewModel.loadSources()
-                        viewModel.loadStatus()
+        )
+        return
+    }
+
+    if (showDetail && currentArticle != null) {
+        FileDetailView(article = currentArticle!!, loading = articleLoading,
+            onBack = { showDetail = false; currentArticle = null; refreshTrigger++ },
+            onDelete = { path ->
+                scope.launch {
+                    api.deleteArticle(path).onSuccess { showDetail = false; currentArticle = null; refreshTrigger++ }
+                        .onFailure { e -> error = e.message }
+                }
+            }
+        )
+        return
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("SageWiki") },
+                actions = { IconButton(onClick = { refreshTrigger++ }) { Icon(Icons.Default.Refresh, "Refresh") } }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(icon = { Icon(Icons.Default.Description, null) }, label = { Text("Files") }, selected = tab == 0, onClick = { tab = 0 })
+                NavigationBarItem(icon = { Icon(Icons.Default.Info, null) }, label = { Text("Status") }, selected = tab == 1, onClick = { tab = 1 })
+                NavigationBarItem(icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Settings") }, selected = tab == 2, onClick = { tab = 2 })
+            }
+        }
+    ) { pad ->
+        Box(Modifier.fillMaxSize().padding(pad)) {
+            when (tab) {
+                0 -> FilesTab(sources, loading, error, status,
+                    onFileClick = { source ->
+                        articleLoading = true; showDetail = true; currentArticle = null
+                        scope.launch { api.getArticle(source.name).onSuccess { a -> currentArticle = a }.onFailure { e -> error = e.message }; articleLoading = false }
+                    },
+                    onRefresh = { refreshTrigger++ }
+                )
+                1 -> StatusTab(status, loading)
+                2 -> SettingsTab(config, false, serverUrl, token,
+                    onLoadConfig = {
+                        if (!configLoaded) { configLoaded = true
+                            scope.launch { api.getConfig().onSuccess { config = it } }
+                        }
+                    },
+                    onDisconnect = {
+                        prefs.edit().clear().apply()
+                        isConfigured = false; serverUrl = ""; token = ""
+                        status = null; sources = emptyList(); config = null; error = null; configLoaded = false
                     }
-                    FileListScreen(
-                        state = state,
-                        onFileClick = { name ->
-                            val encoded = URLEncoder.encode(name, "UTF-8")
-                            navController.navigate("article/$encoded")
-                        },
-                        onRefresh = { viewModel.loadSources(); viewModel.loadStatus() },
-                        onOpenDrawer = { scope.launch { drawerState.open() } }
-                    )
-                }
-                composable(
-                    "article/{name}",
-                    arguments = listOf(navArgument("name") { type = NavType.StringType })
-                ) { backStackEntry ->
-                    val name = backStackEntry.arguments?.getString("name") ?: ""
-                    LaunchedEffect(name) {
-                        viewModel.loadArticle(name)
-                    }
-                    FileDetailScreen(
-                        state = state,
-                        onBack = { navController.popBackStack() },
-                        onSave = { path, content -> viewModel.saveArticle(path, content) },
-                        onDelete = { path -> viewModel.deleteArticle(path) }
-                    )
-                }
-                composable("server") {
-                    ServerScreen(
-                        state = state,
-                        onLoadConfig = { viewModel.loadConfig() },
-                        onUpdateConfig = { viewModel.updateConfig(it) },
-                        onBack = { navController.popBackStack() }
-                    )
-                }
-                composable("settings") {
-                    SettingsScreen(
-                        state = state,
-                        onServerUrlChange = { viewModel.setServerUrl(it) },
-                        onTokenChange = { viewModel.setToken(it) },
-                        onReconnect = { viewModel.connect() },
-                        onLogout = {
-                            viewModel.logout()
-                            navController.navigate("files") { popUpTo(0) { inclusive = true } }
-                        },
-                        onBack = { navController.popBackStack() }
-                    )
-                }
+                )
             }
         }
     }

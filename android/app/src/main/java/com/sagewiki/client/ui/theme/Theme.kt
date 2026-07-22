@@ -17,8 +17,5 @@ private val LightColors = lightColorScheme(
 
 @Composable
 fun SageWikiTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = LightColors,
-        content = content
-    )
+    MaterialTheme(colorScheme = LightColors, content = content)
 }
