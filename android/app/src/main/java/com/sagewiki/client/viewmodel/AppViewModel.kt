@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.sagewiki.client.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,12 +19,10 @@ data class AppState(
     val connecting: Boolean = false,
     val connectionError: String? = null,
 
-    // Server data
     val sources: List<SourceInfo> = emptyList(),
     val sourcesLoading: Boolean = false,
     val sourcesError: String? = null,
 
-    // Article detail
     val currentArticle: ArticleResponse? = null,
     val articleLoading: Boolean = false,
     val articleError: String? = null,
@@ -33,21 +30,17 @@ data class AppState(
     val articleSaved: Boolean = false,
     val articleDeleted: Boolean = false,
 
-    // Server config
     val config: ConfigResponse? = null,
     val configLoading: Boolean = false,
     val configSaving: Boolean = false,
     val configSaved: Boolean = false,
 
-    // Server status
     val status: StatusResponse? = null,
     val statusLoading: Boolean = false,
 
-    // Share
     val shareProcessing: Boolean = false,
     val shareResult: String? = null,
 
-    // App
     val api: SageWikiApi? = null,
     val appVersion: String = "1.0.0"
 )
@@ -68,9 +61,10 @@ class AppViewModel : ViewModel() {
             _state.value = _state.value.copy(
                 serverUrl = savedUrl,
                 token = savedToken,
-                api = api
+                api = api,
+                isConfigured = true,
+                isConnected = true
             )
-            connect()
         }
     }
 
@@ -109,8 +103,6 @@ class AppViewModel : ViewModel() {
                     connecting = false,
                     connectionError = null
                 )
-                loadSources()
-                loadStatus()
             }.onFailure { e ->
                 _state.value = _state.value.copy(
                     connecting = false,
@@ -122,6 +114,7 @@ class AppViewModel : ViewModel() {
 
     fun loadSources() {
         val api = _state.value.api ?: return
+        if (_state.value.sourcesLoading) return
         _state.value = _state.value.copy(sourcesLoading = true, sourcesError = null)
 
         viewModelScope.launch {
@@ -234,6 +227,7 @@ class AppViewModel : ViewModel() {
 
     fun loadStatus() {
         val api = _state.value.api ?: return
+        if (_state.value.statusLoading) return
         _state.value = _state.value.copy(statusLoading = true)
 
         viewModelScope.launch {

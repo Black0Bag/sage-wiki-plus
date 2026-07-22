@@ -37,7 +37,6 @@ class MainActivity : ComponentActivity() {
         viewModel = ViewModelProvider(this)[AppViewModel::class.java]
         viewModel.init(applicationContext)
 
-        // Handle incoming share intent
         handleShareIntent(intent)
 
         setContent {
@@ -58,13 +57,12 @@ class MainActivity : ComponentActivity() {
             when {
                 type?.startsWith("text/plain") == true -> {
                     val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-                    val sharedTitle = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: "来自分享"
+                    val sharedTitle = intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: "匿名分享"
                     if (sharedText != null) {
                         viewModel.shareContent(sharedTitle, sharedText, null)
                     }
                 }
                 type?.startsWith("image/") == true -> {
-                    // Image sharing - we'll handle this in future updates
                     Toast.makeText(this, "图片分享正在开发中", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -80,17 +78,7 @@ fun MainContent(viewModel: AppViewModel) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
-    // Share result notification
-    LaunchedEffect(state.shareResult) {
-        state.shareResult?.let {
-            if (it.startsWith("✅")) {
-                viewModel.clearShareResult()
-            }
-        }
-    }
-
     if (!state.isConfigured) {
-        // First launch - setup screen
         SetupScreen(
             state = state,
             onServerUrlChange = { viewModel.setServerUrl(it) },
@@ -98,7 +86,6 @@ fun MainContent(viewModel: AppViewModel) {
             onConnect = { viewModel.connect() }
         )
     } else {
-        // Main app with navigation
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -125,7 +112,7 @@ fun MainContent(viewModel: AppViewModel) {
                     )
                     NavigationDrawerItem(
                         icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                        label = { Text("服务器管理") },
+                        label = { Text("服务器配置") },
                         selected = false,
                         onClick = {
                             navController.navigate("server")
@@ -156,6 +143,10 @@ fun MainContent(viewModel: AppViewModel) {
                 startDestination = "files"
             ) {
                 composable("files") {
+                    LaunchedEffect(Unit) {
+                        viewModel.loadSources()
+                        viewModel.loadStatus()
+                    }
                     FileListScreen(
                         state = state,
                         onFileClick = { name ->

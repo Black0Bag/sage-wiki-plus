@@ -45,8 +45,10 @@ class SageWikiApi(
                 .build()
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
-            if (response.isSuccessful) {
+            if (response.isSuccessful && body.isNotBlank()) {
                 Result.success(gson.fromJson(body, type))
+            } else if (response.isSuccessful) {
+                Result.success(type.getDeclaredConstructor().newInstance())
             } else {
                 Result.failure(IOException("HTTP ${response.code}: $body"))
             }
@@ -65,8 +67,10 @@ class SageWikiApi(
                 .build()
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
-            if (response.isSuccessful) {
+            if (response.isSuccessful && body.isNotBlank()) {
                 Result.success(gson.fromJson(body, type))
+            } else if (response.isSuccessful) {
+                Result.success(type.getDeclaredConstructor().newInstance())
             } else {
                 Result.failure(IOException("HTTP ${response.code}: $body"))
             }
@@ -75,7 +79,7 @@ class SageWikiApi(
         }
     }
 
-    private suspend fun putJson(path: String, bodyObj: Any, type: Class<*>): Result<Unit> = withContext(Dispatchers.IO) {
+    private suspend fun putStr(path: String, bodyObj: Any): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val json = gson.toJson(bodyObj)
             val request = Request.Builder()
@@ -87,8 +91,8 @@ class SageWikiApi(
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                val body = response.body?.string() ?: ""
-                Result.failure(IOException("HTTP ${response.code}: $body"))
+                val responseBody = response.body?.string() ?: ""
+                Result.failure(IOException("HTTP ${response.code}: $responseBody"))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -109,63 +113,55 @@ class SageWikiApi(
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                val body = response.body?.string() ?: ""
-                Result.failure(IOException("HTTP ${response.code}: $body"))
+                val responseBody = response.body?.string() ?: ""
+                Result.failure(IOException("HTTP ${response.code}: $responseBody"))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    // === Public API Methods ===
+    private suspend fun putJson(path: String, bodyObj: Any, type: Class<*>): Result<Unit> {
+        return putStr(path, bodyObj)
+    }
 
-    /** Verify connection - health check */
     suspend fun health(): Result<SimpleResponse> {
         return get("/api/health", SimpleResponse::class.java)
     }
 
-    /** Get server status */
     suspend fun status(): Result<StatusResponse> {
         return get("/api/status", StatusResponse::class.java)
     }
 
-    /** List source files */
     suspend fun listSources(): Result<SourceListResponse> {
         return get("/api/sources", SourceListResponse::class.java)
     }
 
-    /** Get article content by path */
     suspend fun getArticle(path: String): Result<ArticleResponse> {
-        val articlePath = path.removeSuffix(".md")
-        return get("/api/articles/$articlePath", ArticleResponse::class.java)
+        val cleanPath = path.removeSuffix(".md")
+        return get("/api/articles/$cleanPath", ArticleResponse::class.java)
     }
 
-    /** Write/update an article */
     suspend fun writeArticle(path: String, content: String, message: String? = null): Result<ArticleWriteResponse> {
         return postJson("/api/article", ArticleWriteRequest(path, content, message), ArticleWriteResponse::class.java)
     }
 
-    /** Delete an article */
     suspend fun deleteArticle(path: String): Result<Unit> {
         return delete("/api/article", mapOf("id" to path))
     }
 
-    /** Get server config */
     suspend fun getConfig(): Result<ConfigResponse> {
         return get("/api/config", ConfigResponse::class.java)
     }
 
-    /** Update server config - send raw config map */
     suspend fun updateConfig(config: Map<String, Any>): Result<Unit> {
         return putJson("/api/config", config, Any::class.java)
     }
 
-    /** Share a URL/text */
     suspend fun share(title: String?, text: String?, url: String?): Result<SimpleResponse> {
         return postJson("/api/share", ShareRequest(title, text, url, "android-app"), SimpleResponse::class.java)
     }
 
-    /** Trigger compilation */
     suspend fun compile(): Result<SimpleResponse> {
         return postJson("/api/compile", emptyMap<String, Any>(), SimpleResponse::class.java)
     }
