@@ -50,25 +50,22 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Install Android SDK
+      - name: Install Android SDK components
         run: |
           SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           echo "SDK_ROOT=$SDK_ROOT"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
           if [ -f "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
             yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 || true
           else
-            echo "sdkmanager not found, checking alternatives..."
-            find / -name "sdkmanager" 2>/dev/null | head -3
+            echo "sdkmanager not found"
+            ls -la "$SDK_ROOT/cmdline-tools/" 2>/dev/null || echo "no cmdline-tools"
           fi
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
       - name: Build APK
         working-directory: android
         run: |
           chmod +x gradlew
-          export ANDROID_HOME="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la
+          echo "Using SDK at: ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1
       - name: Sign APK (if keystore available)
         working-directory: android
