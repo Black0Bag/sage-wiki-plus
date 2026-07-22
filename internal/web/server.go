@@ -264,15 +264,15 @@ func (s *WebServer) handleArticle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ensure .md extension
-	if !strings.HasSuffix(articlePath, ".md") {
-		articlePath += ".md"
-	}
-
 	var absPath string
 	if strings.HasPrefix(articlePath, "raw/") {
+		// Raw source files keep their original extension
 		absPath = filepath.Join(s.projectDir, articlePath)
 	} else {
+		// Ensure .md extension for compiled articles
+		if !strings.HasSuffix(articlePath, ".md") {
+			articlePath += ".md"
+		}
 		absPath = filepath.Join(s.projectDir, s.cfg.Output, articlePath)
 	}
 
