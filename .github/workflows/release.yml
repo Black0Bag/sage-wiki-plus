@@ -66,23 +66,7 @@ jobs:
         run: |
           chmod +x gradlew
           echo "Using SDK at: ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1
-      - name: Sign APK (if keystore available)
-        working-directory: android
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Keystore found, signing..."
-            echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
-            ./gradlew assembleRelease --no-daemon --stacktrace \
-              -Pandroid.injected.signing.store.file=app/keystore.jks \
-              -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-              -Pandroid.injected.signing.key.alias=${{ secrets.KEYSTORE_ALIAS }} \
-              -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-          else
-            echo "No keystore set, using unsigned APK"
-          fi
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
       - name: List APK
         working-directory: android
         run: |
@@ -91,7 +75,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sage-wiki-plus-android
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
   release:
@@ -114,7 +98,7 @@ jobs:
       - name: Generate release assets
         run: |
           sha256sum sage-wiki-plus_*.tar.gz > checksums.txt
-          APK="android-apk/app-release-unsigned.apk"
+          APK="android-apk/app-debug.apk"
           if [ ! -f "$APK" ]; then
             APK=$(find android-apk -name "*.apk" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
           fi
