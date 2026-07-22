@@ -50,15 +50,22 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-home-cache-cleanup: true
+      - name: Install Android SDK
+        run: |
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 || true
+      - name: List SDK
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls $ANDROID_SDK_ROOT/platforms/ 2>/dev/null || echo "No platforms dir"
+          ls $ANDROID_SDK_ROOT/build-tools/ 2>/dev/null || echo "No build-tools dir"
       - name: Build APK
         working-directory: android
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1
       - name: Sign APK (if keystore available)
         working-directory: android
         env:
@@ -67,22 +74,23 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Keystore found, signing..."
             echo "$KEYSTORE_BASE64" | base64 -d > app/keystore.jks
-            ./gradlew assembleRelease --no-daemon \
+            ./gradlew assembleRelease --no-daemon --stacktrace \
               -Pandroid.injected.signing.store.file=app/keystore.jks \
               -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
               -Pandroid.injected.signing.key.alias=${{ secrets.KEYSTORE_ALIAS }} \
               -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
           else
-            echo "No keystore set, using unsigned APK (debuggable install only)"
+            echo "No keystore set, using unsigned APK"
           fi
       - name: List APK
         working-directory: android
         run: |
-          find . -name "*.apk" -exec ls -lh {} \;
+          find . -name "*.apk" -o -name "*.aab" | head -5
+          ls -lh app/build/outputs/ 2>/dev/null || echo "No outputs dir"
       - uses: actions/upload-artifact@v4
         with:
           name: sage-wiki-plus-android
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/*/release/*.apk
 
   release:
     needs: [build, android]
