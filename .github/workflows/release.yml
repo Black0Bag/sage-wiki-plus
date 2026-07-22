@@ -41,45 +41,8 @@ jobs:
           name: sage-wiki-plus_${{ matrix.goos }}_${{ matrix.goarch }}
           path: sage-wiki-plus_*.tar.gz
 
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-      - name: Install Android SDK components
-        run: |
-          SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          echo "SDK_ROOT=$SDK_ROOT"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
-          if [ -f "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 || true
-          else
-            echo "sdkmanager not found"
-            ls -la "$SDK_ROOT/cmdline-tools/" 2>/dev/null || echo "no cmdline-tools"
-          fi
-      - name: Build APK
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          echo "Using SDK at: ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
-      - name: List APK
-        working-directory: android
-        run: |
-          find . -name "*.apk" -o -name "*.aab" | head -5
-          ls -lh app/build/outputs/ 2>/dev/null || echo "No outputs dir"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sage-wiki-plus-android
-          path: android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
-
   release:
-    needs: [build, android]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,22 +52,9 @@ jobs:
         with:
           pattern: sage-wiki-plus_*
           merge-multiple: true
-      - name: Download Android APK (optional)
-        uses: actions/download-artifact@v4
-        with:
-          name: sage-wiki-plus-android
-          path: android-apk
-        continue-on-error: true
       - name: Generate release assets
         run: |
           sha256sum sage-wiki-plus_*.tar.gz > checksums.txt
-          APK="android-apk/app-debug.apk"
-          if [ ! -f "$APK" ]; then
-            APK=$(find android-apk -name "*.apk" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-          fi
-          if [ -f "$APK" ]; then
-            cp "$APK" sage-wiki-plus-android.apk
-          fi
           {
             echo "## sage-wiki-plus $(git rev-parse --short HEAD)"
             echo ""
@@ -112,16 +62,10 @@ jobs:
             for f in sage-wiki-plus_*.tar.gz; do
               echo "- \`$f\`"
             done
-            if [ -f sage-wiki-plus-android.apk ]; then
-              echo "- \`sage-wiki-plus-android.apk\` (Android APK)"
-            fi
             echo ""
             echo "### Checksums"
             echo '```'
             cat checksums.txt
-            if [ -f sage-wiki-plus-android.apk ]; then
-              sha256sum sage-wiki-plus-android.apk
-            fi
             echo '```'
           } > release-notes.md
           cat release-notes.md
@@ -130,11 +74,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
-          ASSETS="sage-wiki-plus_*.tar.gz checksums.txt"
-          if [ -f sage-wiki-plus-android.apk ]; then
-            ASSETS="$ASSETS sage-wiki-plus-android.apk"
-          fi
           gh release create "v${VERSION}" \
             --title "sage-wiki-plus v${VERSION}" \
             --notes-file release-notes.md \
-            ${ASSETS}
+            sage-wiki-plus_*.tar.gz checksums.txt
