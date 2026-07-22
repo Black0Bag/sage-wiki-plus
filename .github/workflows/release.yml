@@ -91,7 +91,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sage-wiki-plus-android
-          path: android/app/build/outputs/apk/*/release/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
 
   release:
     needs: [build, android]
@@ -104,16 +105,18 @@ jobs:
         with:
           pattern: sage-wiki-plus_*
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - name: Download Android APK (optional)
+        uses: actions/download-artifact@v4
         with:
           name: sage-wiki-plus-android
           path: android-apk
+        continue-on-error: true
       - name: Generate release assets
         run: |
           sha256sum sage-wiki-plus_*.tar.gz > checksums.txt
           APK="android-apk/app-release-unsigned.apk"
           if [ ! -f "$APK" ]; then
-            APK=$(find android-apk -name "*.apk" | head -1)
+            APK=$(find android-apk -name "*.apk" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
           fi
           if [ -f "$APK" ]; then
             cp "$APK" sage-wiki-plus-android.apk
@@ -142,12 +145,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
+          VERSION="$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)"
           ASSETS="sage-wiki-plus_*.tar.gz checksums.txt"
           if [ -f sage-wiki-plus-android.apk ]; then
             ASSETS="$ASSETS sage-wiki-plus-android.apk"
           fi
-          gh release create "$VERSION" \
-            --title "sage-wiki-plus $VERSION" \
+          gh release create "v${VERSION}" \
+            --title "sage-wiki-plus v${VERSION}" \
             --notes-file release-notes.md \
-            $ASSETS
+            ${ASSETS}
