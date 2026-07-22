@@ -15,7 +15,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
-import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -25,6 +24,7 @@ import androidx.navigation.navArgument
 import com.sagewiki.client.ui.theme.SageWikiTheme
 import com.sagewiki.client.ui.screens.*
 import com.sagewiki.client.viewmodel.AppViewModel
+import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
 class MainActivity : ComponentActivity() {
@@ -110,7 +110,7 @@ fun MainContent(viewModel: AppViewModel) {
                         fontSize = 20.sp,
                         modifier = Modifier.padding(16.dp)
                     )
-                    HorizontalDivider()
+                    Divider()
 
                     NavigationDrawerItem(
                         icon = { Icon(Icons.Default.Folder, contentDescription = null) },
@@ -141,7 +141,7 @@ fun MainContent(viewModel: AppViewModel) {
                             scope.launch { drawerState.close() }
                         }
                     )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Divider(modifier = Modifier.padding(vertical = 8.dp))
                     Text(
                         "v${state.appVersion}",
                         fontSize = 12.sp,

@@ -68,7 +68,7 @@ fun FileListScreen(
                     StatChip("实体 ${state.status.entities}")
                     StatChip("关系 ${state.status.relations}")
                 }
-                HorizontalDivider()
+                Divider()
             }
 
             // Source list
@@ -174,7 +174,7 @@ private fun SourceItem(source: SourceInfo, onClick: () -> Unit) {
             )
         }
     }
-    HorizontalDivider(
+    Divider(
         modifier = Modifier.padding(start = 52.dp),
         thickness = 0.5.dp
     )
