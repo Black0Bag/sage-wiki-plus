@@ -17,3 +17,11 @@ sage/
 bin/sage-wiki-plus
 .release_*
 .last_upstream*
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/gradle/wrapper/gradle-wrapper.jar
