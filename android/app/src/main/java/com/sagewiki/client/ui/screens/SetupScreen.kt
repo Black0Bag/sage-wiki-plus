@@ -45,7 +45,7 @@ fun SetupScreen(
         )
 
         Text(
-            text = "连接到你的知识库服务器",
+            text = "连接你的知识库服务器",
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -55,7 +55,7 @@ fun SetupScreen(
             value = state.serverUrl,
             onValueChange = onServerUrlChange,
             label = { Text("服务器地址") },
-            placeholder = { Text("https://blackbag.dynv6.net:8082") },
+            placeholder = { Text("https://your-server:8082") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
@@ -67,7 +67,7 @@ fun SetupScreen(
             value = state.token,
             onValueChange = onTokenChange,
             label = { Text("Bearer Token（可选）") },
-            placeholder = { Text("如果服务器启用了认证") },
+            placeholder = { Text("如需要身份验证") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)

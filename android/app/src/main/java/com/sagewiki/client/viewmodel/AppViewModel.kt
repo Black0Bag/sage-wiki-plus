@@ -61,7 +61,6 @@ class AppViewModel : ViewModel() {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences("sagewiki_prefs", Context.MODE_PRIVATE)
-        // Load saved config
         val savedUrl = prefs.getString("server_url", "") ?: ""
         val savedToken = prefs.getString("bearer_token", "") ?: ""
         if (savedUrl.isNotBlank()) {
@@ -69,7 +68,6 @@ class AppViewModel : ViewModel() {
             _state.value = _state.value.copy(
                 serverUrl = savedUrl,
                 token = savedToken,
-                isConfigured = true,
                 api = api
             )
             connect()
@@ -104,13 +102,13 @@ class AppViewModel : ViewModel() {
         viewModelScope.launch {
             val result = api.health()
             result.onSuccess {
+                savePrefs()
                 _state.value = _state.value.copy(
                     isConfigured = true,
                     isConnected = true,
                     connecting = false,
                     connectionError = null
                 )
-                savePrefs()
                 loadSources()
                 loadStatus()
             }.onFailure { e ->
@@ -228,7 +226,7 @@ class AppViewModel : ViewModel() {
             }.onFailure { e ->
                 _state.value = _state.value.copy(
                     configSaving = false,
-                    connectionError = "保存配置失败: ${e.message}"
+                    connectionError = "更新配置失败: ${e.message}"
                 )
             }
         }
@@ -255,7 +253,7 @@ class AppViewModel : ViewModel() {
             api.share(title, text, url).onSuccess {
                 _state.value = _state.value.copy(
                     shareProcessing = false,
-                    shareResult = "已分享到知识库 ✅"
+                    shareResult = "已分享到知识库"
                 )
             }.onFailure { e ->
                 _state.value = _state.value.copy(
