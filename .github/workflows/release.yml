@@ -52,19 +52,23 @@ jobs:
           distribution: 'temurin'
       - name: Install Android SDK
         run: |
-          export ANDROID_HOME=$ANDROID_SDK_ROOT
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 || true
-      - name: List SDK
-        run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls $ANDROID_SDK_ROOT/platforms/ 2>/dev/null || echo "No platforms dir"
-          ls $ANDROID_SDK_ROOT/build-tools/ 2>/dev/null || echo "No build-tools dir"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          echo "SDK_ROOT=$SDK_ROOT"
+          if [ -f "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 || true
+          else
+            echo "sdkmanager not found, checking alternatives..."
+            find / -name "sdkmanager" 2>/dev/null | head -3
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
       - name: Build APK
         working-directory: android
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           chmod +x gradlew
+          export ANDROID_HOME="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la
           ./gradlew assembleRelease --no-daemon --stacktrace 2>&1
       - name: Sign APK (if keystore available)
         working-directory: android
