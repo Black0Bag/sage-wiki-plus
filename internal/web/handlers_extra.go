@@ -147,36 +147,158 @@ func (s *WebServer) handleSourceUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *WebServer) handleSourceList(w http.ResponseWriter, r *http.Request) {
 	rawDir := filepath.Join(s.projectDir, "raw")
-	entries, err := os.ReadDir(rawDir)
-	if err != nil {
-		writeJSON(w, map[string]any{"sources": []any{}, "total": 0})
+
+	switch r.Method {
+	case http.MethodGet:
+		entries, err := os.ReadDir(rawDir)
+		if err != nil {
+			writeJSON(w, map[string]any{"sources": []any{}, "total": 0})
+			return
+		}
+
+		type sourceInfo struct {
+			Name    string `json:"name"`
+			Size    int64  `json:"size"`
+			ModTime string `json:"mod_time"`
+		}
+
+		var sources []sourceInfo
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			info, _ := e.Info()
+			sources = append(sources, sourceInfo{
+				Name:    e.Name(),
+				Size:    info.Size(),
+				ModTime: info.ModTime().Format(time.RFC3339),
+			})
+		}
+
+		sort.Slice(sources, func(i, j int) bool {
+			return sources[i].Name < sources[j].Name
+		})
+
+		writeJSON(w, map[string]any{"sources": sources, "total": len(sources)})
+
+	case http.MethodDelete:
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name query param required", http.StatusBadRequest)
+			return
+		}
+		absPath := filepath.Join(rawDir, name)
+		absRaw, _ := filepath.Abs(rawDir)
+		absResolved, _ := filepath.Abs(absPath)
+		if !strings.HasPrefix(absResolved, absRaw) {
+			http.Error(w, "path traversal", http.StatusForbidden)
+			return
+		}
+		if err := os.Remove(absPath); err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "file not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "delete error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Info("source deleted", "name", name)
+		writeJSON(w, map[string]any{"status": "deleted", "name": name})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---------- 原始文件下载 ----------
+// GET /api/sources/raw/{name} — 以原始字节返回文件内容（支持任意格式）
+func (s *WebServer) handleSourceRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	type sourceInfo struct {
-		Name    string `json:"name"`
-		Size    int64  `json:"size"`
-		ModTime string `json:"mod_time"`
+	name := strings.TrimPrefix(r.URL.Path, "/api/sources/raw/")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
 	}
-
-	var sources []sourceInfo
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	rawDir := filepath.Join(s.projectDir, "raw")
+	absPath := filepath.Join(rawDir, name)
+	absRaw, _ := filepath.Abs(rawDir)
+	absResolved, _ := filepath.Abs(absPath)
+	if !strings.HasPrefix(absResolved, absRaw) {
+		http.Error(w, "path traversal", http.StatusForbidden)
+		return
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
 		}
-		info, _ := e.Info()
-		sources = append(sources, sourceInfo{
-			Name:    e.Name(),
-			Size:    info.Size(),
-			ModTime: info.ModTime().Format(time.RFC3339),
-		})
+		http.Error(w, "read error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	// Detect content type
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(name, ".txt") {
+		contentType = "text/plain; charset=utf-8"
+	} else if strings.HasSuffix(name, ".md") {
+		contentType = "text/markdown; charset=utf-8"
+	} else if strings.HasSuffix(name, ".html") || strings.HasSuffix(name, ".htm") {
+		contentType = "text/html; charset=utf-8"
+	} else if strings.HasSuffix(name, ".json") {
+		contentType = "application/json"
+	} else if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+		contentType = "image/jpeg"
+	} else if strings.HasSuffix(name, ".png") {
+		contentType = "image/png"
+	} else if strings.HasSuffix(name, ".gif") {
+		contentType = "image/gif"
+	} else if strings.HasSuffix(name, ".webp") {
+		contentType = "image/webp"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+name+"\"")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
 
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i].Name < sources[j].Name
-	})
-
-	writeJSON(w, map[string]any{"sources": sources, "total": len(sources)})
+// ---------- 源文件更新 ----------
+// PUT /api/sources/update — 更新 raw/ 下的文件内容
+// Body: {"name": "xxx.txt", "content": "..."}
+func (s *WebServer) handleSourceUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	rawDir := filepath.Join(s.projectDir, "raw")
+	absPath := filepath.Join(rawDir, body.Name)
+	absRaw, _ := filepath.Abs(rawDir)
+	absResolved, _ := filepath.Abs(absPath)
+	if !strings.HasPrefix(absResolved, absRaw) {
+		http.Error(w, "path traversal", http.StatusForbidden)
+		return
+	}
+	if err := os.WriteFile(absPath, []byte(body.Content), 0644); err != nil {
+		http.Error(w, "write error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Info("source updated", "name", body.Name)
+	s.BroadcastReload()
+	writeJSON(w, map[string]any{"status": "ok", "name": body.Name})
 }
 
 // ---------- 触发编译 ----------

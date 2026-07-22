@@ -90,6 +90,8 @@ func (s *WebServer) Handler() http.Handler {
 	// === sage-wiki-plus 新增 API ===
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/sources/upload", s.handleSourceUpload)
+	mux.HandleFunc("/api/sources/raw/", s.handleSourceRaw)
+	mux.HandleFunc("/api/sources/update", s.handleSourceUpdate)
 	mux.HandleFunc("/api/sources", s.handleSourceList)
 	mux.HandleFunc("/api/compile", s.handleCompile)
 	mux.HandleFunc("/api/models", s.handleModels)
