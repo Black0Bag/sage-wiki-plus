@@ -184,8 +184,8 @@ func init() {
 	compileCmd.Flags().Bool("prune", false, "Delete orphaned articles when their sole source is removed")
 
 	// Serve flags
-	serveCmd.Flags().String("transport", "stdio", "Transport: stdio, sse, or streamable-http")
-	serveCmd.Flags().Int("port", 3333, "SSE/UI port")
+	serveCmd.Flags().String("transport", "stdio", "Transport: stdio or streamable-http")
+	serveCmd.Flags().Int("port", 3333, "MCP/UI port")
 	serveCmd.Flags().Bool("ui", false, "Start web UI viewer")
 	serveCmd.Flags().String("bind", "127.0.0.1", "Bind address (default localhost only)")
 
@@ -494,19 +494,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		listenAddr := fmt.Sprintf("%s:%d", bind, port)
 		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on Streamable HTTP (%s)\n", listenAddr)
 		return srv.ServeStreamableHTTP(listenAddr)
-	}
-	if transport == "sse" {
-		port, _ := cmd.Flags().GetInt("port")
-		bind, _ := cmd.Flags().GetString("bind")
-		listenAddr := fmt.Sprintf("%s:%d", bind, port)
-		// Use bind address for the base URL; if bound to 0.0.0.0, fallback to a public IP
-		advertiseHost := bind
-		if advertiseHost == "0.0.0.0" || advertiseHost == "" {
-			advertiseHost = "127.0.0.1"
-		}
-		advertiseURL := fmt.Sprintf("http://%s:%d", advertiseHost, port)
-		fmt.Fprintf(os.Stderr, "sage-wiki MCP server starting on SSE (%s), advertise: %s\n", listenAddr, advertiseURL)
-		return srv.ServeSSE(listenAddr, advertiseURL)
 	}
 
 	fmt.Fprintln(os.Stderr, "sage-wiki MCP server starting on stdio...")

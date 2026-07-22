@@ -101,15 +101,6 @@ func (s *Server) ServeStdio() error {
 	return server.ServeStdio(s.mcp)
 }
 
-// ServeSSE starts the MCP server on SSE transport.
-// listenAddr is the address the server listens on (e.g. "0.0.0.0:8083").
-// advertiseURL is the base URL announced to clients (e.g. "http://192.168.1.2:8083").
-func (s *Server) ServeSSE(listenAddr, advertiseURL string) error {
-	defer s.db.Close()
-	sseServer := server.NewSSEServer(s.mcp, server.WithBaseURL(advertiseURL))
-	return sseServer.Start(listenAddr)
-}
-
 // ServeStreamableHTTP starts the MCP server on Streamable HTTP transport.
 // This replaces outdated SSE with modern HTTP POST-based MCP.
 func (s *Server) ServeStreamableHTTP(listenAddr string) error {

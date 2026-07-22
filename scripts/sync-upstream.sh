@@ -4,8 +4,10 @@ set -euo pipefail
 
 UPSTREAM_REPO="https://github.com/xoai/sage-wiki.git"
 UPSTREAM_BRANCH="main"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE="$(cd "$SCRIPT_DIR/.." && pwd)"
 UPSTREAM_DIR="/tmp/sage-wiki-upstream"
-PATCHES_DIR="$(dirname "$0")/../patches"
+PATCHES_DIR="$WORKSPACE/patches"
 
 echo "🔍 检测上游更新: xoai/sage-wiki"
 
@@ -27,7 +29,10 @@ echo "📦 检测到上游更新，开始同步..."
 
 # 完整克隆上游
 rm -rf "$UPSTREAM_DIR"
-git clone --depth 1 "$UPSTREAM_REPO" "$UPSTREAM_DIR" 2>/dev/null
+if ! git clone --depth 1 "$UPSTREAM_REPO" "$UPSTREAM_DIR"; then
+    echo "❌ 克隆上游仓库失败" >&2
+    exit 1
+fi
 
 # 记录同步前版本
 BEFORE_COMMIT=$(git rev-parse HEAD)
@@ -36,23 +41,35 @@ BEFORE_COMMIT=$(git rev-parse HEAD)
 echo "📋 同步文件..."
 cd "$UPSTREAM_DIR"
 # 使用 tar 排除 .git 后复制到工作区
-WORKSPACE="$(dirname "$0")/.."
 cd "$WORKSPACE"
 
 # 暂存定制文件
 TMP_DIR=$(mktemp -d)
 SAVED_FILES=(
     "README.md"
+    "CHANGELOG.md"
+    ".github/workflows/sync-upstream.yml"
+    ".github/workflows/release.yml"
+    "cmd/sage-wiki/main.go"
+    "cmd/sage-wiki/main_test.go"
+    "internal/mcp/server.go"
+    "internal/mcp/server_test.go"
+    "internal/mcp/server_truncate_test.go"
+    "internal/mcp/tools_compound.go"
+    "internal/mcp/tools_write.go"
+    "internal/mcp/tools_write_test.go"
     "internal/web/handlers_extra.go"
     "internal/web/server.go"
+    "internal/web/server_test.go"
+    "internal/web/static_webui.go"
     "internal/web/dist/index.html"
     "internal/web/dist/assets/app.css"
     "internal/web/dist/assets/app.js"
     "scripts/sync-upstream.sh"
     "scripts/auto-release.sh"
+    "scripts/extract-changelog.sh"
     "patches"
-    ".github/workflows/sync-upstream.yml"
-    ".github/workflows/release.yml"
+    "web/src"
 )
 
 for f in "${SAVED_FILES[@]}"; do
@@ -86,7 +103,7 @@ if [ -d "$PATCHES_DIR" ]; then
     for patch in "$PATCHES_DIR"/*.patch; do
         [ -f "$patch" ] || continue
         echo "  应用: $(basename $patch)"
-        git apply "$patch" 2>/dev/null || echo "  ⚠️  补丁 $patch 应用失败（可能已包含）"
+        git apply "$patch" || echo "  ⚠️  补丁 $patch 应用失败（可能已包含）"
     done
 fi
 
@@ -95,7 +112,7 @@ find . -name '*.go' -exec sed -i 's|github.com/xoai/sage-wiki|github.com/Black0B
 sed -i 's|module github.com/xoai/sage-wiki|module github.com/Black0Bag/sage-wiki-plus|' go.mod 2>/dev/null || true
 
 # 更新 go.sum
-go mod tidy 2>/dev/null || echo "⚠️ go mod tidy 跳过（可手动执行）"
+go mod tidy || echo "⚠️ go mod tidy 失败（可手动执行）"
 
 # 记录同步
 echo "$LATEST" > "$SYNC_FILE"
@@ -106,8 +123,11 @@ if [ "$BEFORE_COMMIT" != "$AFTER_COMMIT" ]; then
     echo "   变更: $BEFORE_COMMIT → $AFTER_COMMIT"
     # 自动 commit
     git add -A
-    git commit -m "chore: sync upstream to $LATEST" --allow-empty 2>/dev/null || true
-    echo "   已自动 commit"
+    if ! git commit -m "chore: sync upstream to $LATEST" --allow-empty; then
+        echo "⚠️ git commit 失败"
+    else
+        echo "   已自动 commit"
+    fi
 else
     echo "✅ 同步完成，无代码变更（仅补丁维护）"
 fi
