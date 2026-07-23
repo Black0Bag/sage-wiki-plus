@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,16 +40,77 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if v, ok := updates["llm_model"]; ok {
 			if s, ok := v.(string); ok {
 				newCfg.Models.Summarize = s
+			}
+		}
+		if v, ok := updates["extract_model"]; ok {
+			if s, ok := v.(string); ok {
 				newCfg.Models.Extract = s
+			}
+		}
+		if v, ok := updates["write_model"]; ok {
+			if s, ok := v.(string); ok {
 				newCfg.Models.Write = s
 			}
 		}
+		if v, ok := updates["lint_model"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.Models.Lint = s
+			}
+		}
+		if v, ok := updates["query_model"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.Models.Query = s
+			}
+		}
+
+		// Embedding: model name
 		if v, ok := updates["embedding_model"]; ok {
 			if s, ok := v.(string); ok {
 				if newCfg.Embed == nil {
 					newCfg.Embed = &config.EmbedConfig{}
 				}
 				newCfg.Embed.Model = s
+			}
+		}
+		// Embedding: provider
+		if v, ok := updates["embedding_provider"]; ok {
+			if s, ok := v.(string); ok {
+				if newCfg.Embed == nil {
+					newCfg.Embed = &config.EmbedConfig{}
+				}
+				newCfg.Embed.Provider = s
+			}
+		}
+		// Embedding: dimensions (accepts both number and string)
+		if v, ok := updates["embedding_dims"]; ok {
+			if newCfg.Embed == nil {
+				newCfg.Embed = &config.EmbedConfig{}
+			}
+			switch dv := v.(type) {
+			case float64:
+				newCfg.Embed.Dimensions = int(dv)
+			case string:
+				if n, err := strconv.Atoi(dv); err == nil && n > 0 {
+					newCfg.Embed.Dimensions = n
+				}
+			}
+		}
+		// Embedding: base_url
+		if v, ok := updates["embedding_base_url"]; ok {
+			if s, ok := v.(string); ok {
+				if newCfg.Embed == nil {
+					newCfg.Embed = &config.EmbedConfig{}
+				}
+				newCfg.Embed.BaseURL = s
+			}
+		}
+		// Embedding: api_key
+		if v, ok := updates["embedding_api_key"]; ok {
+			if s, ok := v.(string); ok {
+				if newCfg.Embed == nil {
+					newCfg.Embed = &config.EmbedConfig{}
+				}
+				newCfg.Embed.APIKey = s
 			}
 		}
 		if v, ok := updates["project"]; ok {
