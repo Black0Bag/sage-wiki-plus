@@ -128,13 +128,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           LATEST_TAG="v${{ steps.version.outputs.version }}"
-          echo "Keeping: $LATEST_TAG"
-          for tag in $(gh release list --json tagName --jq '.[].tagName' --limit 100); do
-            if [ "$tag" != "$LATEST_TAG" ]; then
-              echo "Deleting old release: $tag"
-              gh release delete "$tag" --cleanup-tag --yes || true
-            fi
-          done
+          echo "Recreating release for: $LATEST_TAG"
+          # 先尝试删除已存在的同 tag release（处理同版本多次 push 的情况）
+          echo "Deleting existing release (if any) with tag $LATEST_TAG..."
+          gh release delete "$LATEST_TAG" --cleanup-tag --yes || true
+          # 同时清理旧的 release tag (保留 LATEST_TAG 以外的所有历史 tag 不动)
 
       - name: Create Release
         env:
