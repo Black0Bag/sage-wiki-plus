@@ -36,6 +36,9 @@
 | POST/PUT/DELETE | `/api/article` | 文章写入/更新/删除 |
 | GET | `/api/manifest` | 编译清单 |
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/status` | 知识库状态（条目/向量/实体/关系） |
+| GET | `/api/sysinfo` | 宿主机系统信息（CPU/内存/磁盘/温度） |
+| POST | `/api/models/test` | 模型有效性测试 |
 
 ## 🚀 快速开始
 
@@ -125,6 +128,44 @@ GOOS=linux GOARCH=arm GOARM=7 go build -tags webui -o sage-wiki-plus .
 
 - **原项目**: [xoai/sage-wiki](https://github.com/xoai/sage-wiki) — LLM-compiled personal knowledge base
 - 上游使用的 MCP 库: [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go)
+
+## 📋 版本号管理宪法（必须遵循）
+
+> ⚠️ 本规则为本项目的最高规范，所有 Agent 和开发者必须严格遵守。
+
+### 版本格式
+采用语义化版本号：`MAJOR.MINOR.PATCH`（如 `1.2.3`）
+
+### 递增规则
+| 级别 | 递增 | 适用场景 |
+|------|------|---------|
+| **PATCH** | +0.0.1 | Bug 修复、小调整、文案修改、配置微调 |
+| **MINOR** | +0.1.0 | 新功能、新 API 端点、性能改进、界面优化 |
+| **MAJOR** | +1.0.0 | 架构重构、核心逻辑重写、不兼容变更、里程碑更新 |
+
+### 起始版本
+以当前已发布在 GitHub Release 的成功编译文件为 **1.0.0** 起点。后续每次修改并 push 到 main/master 分支时，必须根据修改规模递增版本号。
+
+### 版本号来源
+- 唯一来源：`cmd/sage-wiki/main.go` 中的 `var version` 默认值
+- CI（release.yml）通过 `ldflags` 注入版本号到二进制
+- Release tag 格式：`v1.0.0`（纯语义化，不再使用日期+hash）
+- **每次 Release 必须附简体中文更新日志**
+
+### 更新日志规范
+每次 Release 的 body 必须包含简体中文更新日志，格式：
+```
+## 更新内容
+
+### 新增
+- xxx
+
+### 修复
+- xxx
+
+### 改进
+- xxx
+```
 
 ## 📄 许可证
 

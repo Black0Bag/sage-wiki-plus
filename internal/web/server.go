@@ -102,6 +102,10 @@ func (s *WebServer) Handler() http.Handler {
 	mux.HandleFunc("/api/share/bookmarklet", s.handleShareBookmarklet)
 	mux.HandleFunc("/api/share/preset", s.handleSharePreset)
 
+	// === sage-wiki-plus v1.1.0 新增 API ===
+	mux.HandleFunc("/api/sysinfo", s.handleSysInfo)
+	mux.HandleFunc("/api/models/test", s.handleModelTest)
+
 	// Static files + SPA fallback
 	handler := defaultStaticHandler(s.projectDir)
 	if staticHandler != nil {

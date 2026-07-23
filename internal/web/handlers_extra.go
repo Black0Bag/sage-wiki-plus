@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Black0Bag/sage-wiki-plus/internal/config"
@@ -631,4 +633,226 @@ Content-Type: application/json
 <p>在手机浏览器中保存以下链接到桌面：</p>
 <pre>%s/api/share/bookmarklet</pre>
 </body></html>`, baseURL, baseURL, baseURL)
+}
+
+// ---------- 宿主机系统信息 ----------
+
+func (s *WebServer) handleSysInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	info := map[string]any{}
+
+	// --- Go 运行时内存 ---
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	info["go"] = map[string]any{
+		"version":      runtime.Version(),
+		"goroutines":   runtime.NumGoroutine(),
+		"numCPU":       runtime.NumCPU(),
+		"mem_alloc":    m.Alloc,
+		"mem_sys":      m.Sys,
+		"mem_heap":     m.HeapAlloc,
+		"gc_pause_ns":  m.PauseTotalNs,
+		"num_gc":       m.NumGC,
+	}
+
+	// --- 系统内存 ---
+	var sysInfo syscall.Sysinfo_t
+	if err := syscall.Sysinfo(&sysInfo); err == nil {
+		memTotal := uint64(sysInfo.Totalram) * uint64(sysInfo.Unit)
+		memFree := uint64(sysInfo.Freeram) * uint64(sysInfo.Unit)
+		memBuffer := uint64(sysInfo.Bufferram) * uint64(sysInfo.Unit)
+		memUsed := memTotal - memFree - memBuffer
+		if memUsed > memTotal {
+			memUsed = memTotal - memFree
+		}
+		memUsagePercent := 0.0
+		if memTotal > 0 {
+			memUsagePercent = float64(memUsed) / float64(memTotal) * 100
+		}
+
+		info["memory"] = map[string]any{
+			"total":         memTotal,
+			"used":          memUsed,
+			"free":          memFree,
+			"buffer":        memBuffer,
+			"usage_percent": memUsagePercent,
+		}
+
+		// --- 系统运行时间 ---
+		info["uptime"] = sysInfo.Uptime
+
+		// --- 系统负载 ---
+		load1 := float64(sysInfo.Loads[0]) / 65536.0
+		load5 := float64(sysInfo.Loads[1]) / 65536.0
+		load15 := float64(sysInfo.Loads[2]) / 65536.0
+		info["load"] = map[string]any{
+			"load_1":  load1,
+			"load_5":  load5,
+			"load_15": load15,
+		}
+	}
+
+	// --- 磁盘使用（项目所在分区）---
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.projectDir, &stat); err == nil {
+		diskTotal := stat.Blocks * uint64(stat.Bsize)
+		diskFree := stat.Bfree * uint64(stat.Bsize)
+		diskUsed := diskTotal - diskFree
+		diskPercent := 0.0
+		if diskTotal > 0 {
+			diskPercent = float64(diskUsed) / float64(diskTotal) * 100
+		}
+		info["disk"] = map[string]any{
+			"total":         diskTotal,
+			"used":          diskUsed,
+			"free":          diskFree,
+			"usage_percent": diskPercent,
+		}
+	}
+
+	// --- CPU 温度（ARM 设备 /sys/class/thermal/）---
+	temps := []map[string]any{}
+	for i := 0; i < 8; i++ {
+		path := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			break
+		}
+		tempStr := strings.TrimSpace(string(data))
+		var tempMilli int
+		fmt.Sscanf(tempStr, "%d", &tempMilli)
+		if tempMilli > 0 {
+			zoneType := ""
+			if typeData, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/thermal_zone%d/type", i)); err == nil {
+				zoneType = strings.TrimSpace(string(typeData))
+			}
+			temps = append(temps, map[string]any{
+				"zone":     i,
+				"type":     zoneType,
+				"temp_c":   float64(tempMilli) / 1000.0,
+				"temp_raw": tempMilli,
+			})
+		}
+	}
+	if len(temps) > 0 {
+		info["temperatures"] = temps
+	}
+
+	// --- CPU 信息 ---
+	if cpuModel, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+		lines := strings.Split(string(cpuModel), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "model name") || strings.HasPrefix(line, "Hardware") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					info["cpu_model"] = strings.TrimSpace(parts[1])
+					break
+				}
+			}
+		}
+	}
+
+	// --- 主机名 ---
+	if hostname, err := os.Hostname(); err == nil {
+		info["hostname"] = hostname
+	}
+
+	// --- 编译版本 ---
+	info["version"] = runtime.Version()
+
+	writeJSON(w, info)
+}
+
+// ---------- 模型有效性测试 ----------
+
+func (s *WebServer) handleModelTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Provider string `json:"provider"`
+		BaseURL  string `json:"base_url"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	// 如果未提供参数，使用当前配置
+	if body.BaseURL == "" {
+		body.BaseURL = s.cfg.API.BaseURL
+	}
+	if body.APIKey == "" {
+		body.APIKey = s.cfg.API.APIKey
+	}
+	if body.Model == "" {
+		body.Model = s.cfg.Models.Summarize
+	}
+
+	if body.BaseURL == "" || body.APIKey == "" || body.Model == "" {
+		http.Error(w, "base_url, api_key and model are required", http.StatusBadRequest)
+		return
+	}
+
+	// 构建 OpenAI 兼容的 chat completion 测试请求
+	chatURL := strings.TrimRight(body.BaseURL, "/") + "/chat/completions"
+	reqBody := map[string]any{
+		"model": body.Model,
+		"messages": []map[string]string{
+			{"role": "user", "content": "Hi"},
+		},
+		"max_tokens": 5,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, chatURL, strings.NewReader(string(reqBytes)))
+	if err != nil {
+		writeJSON(w, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+body.APIKey)
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		writeJSON(w, map[string]any{
+			"success":    false,
+			"error":      err.Error(),
+			"model":      body.Model,
+			"latency_ms": elapsed.Milliseconds(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK {
+		writeJSON(w, map[string]any{
+			"success":     true,
+			"model":       body.Model,
+			"latency_ms":  elapsed.Milliseconds(),
+			"status_code": resp.StatusCode,
+		})
+	} else {
+		writeJSON(w, map[string]any{
+			"success":     false,
+			"model":       body.Model,
+			"latency_ms":  elapsed.Milliseconds(),
+			"status_code": resp.StatusCode,
+			"error":       string(respBody),
+		})
+	}
 }

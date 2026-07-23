@@ -46,7 +46,7 @@ var (
 // Defaults are non-blank so `sage-wiki version` from a plain `go build` is
 // still readable.
 var (
-	version = "dev"
+	version = "1.1.0"
 	commit  = "none"
 	date    = "unknown"
 )
