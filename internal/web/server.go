@@ -272,8 +272,17 @@ func (s *WebServer) handleArticle(w http.ResponseWriter, r *http.Request) {
 
 	var absPath string
 	if strings.HasPrefix(articlePath, "raw/") {
-		// Raw source files keep their original extension
-		absPath = filepath.Join(s.projectDir, articlePath)
+		// Raw source files keep their original extension.
+		// Security: restrict to <projectDir>/raw/ only, not entire projectDir.
+		// Without this, /api/articles/raw/../config.yaml could read
+		// sensitive files (P0-3 path traversal vulnerability).
+		rawSubPath := strings.TrimPrefix(articlePath, "raw/")
+		absPath = filepath.Join(s.projectDir, "raw", rawSubPath)
+		// Additional defense: reject any path containing ".."
+		if strings.Contains(rawSubPath, "..") {
+			http.Error(w, "path traversal not allowed", http.StatusForbidden)
+			return
+		}
 	} else {
 		// Ensure .md extension for compiled articles
 		if !strings.HasSuffix(articlePath, ".md") {

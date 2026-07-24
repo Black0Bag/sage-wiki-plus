@@ -21,10 +21,82 @@ import (
 
 // ---------- 配置管理 ----------
 
+// maskKey masks an API key for display: shows first 4 and last 4 chars,
+// replacing the middle with asterisks.  Empty keys return empty string.
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
+}
+
 func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, s.cfg)
+		// Return config as a JSON map with snake_case keys matching the
+		// Android client's ConfigResponse model.  The Go Config struct only
+		// has yaml tags, so json.Marshal would emit Go field names (e.g.
+		// "API", "BaseURL") which Kotlin/Gson cannot map.  Building the map
+		// manually also lets us mask the API key.
+		api := map[string]any{
+			"provider":   s.cfg.API.Provider,
+			"api_key":    maskKey(s.cfg.API.APIKey),
+			"base_url":   s.cfg.API.BaseURL,
+			"rate_limit": s.cfg.API.RateLimit,
+		}
+		models := map[string]any{
+			"summarize": s.cfg.Models.Summarize,
+			"extract":   s.cfg.Models.Extract,
+			"write":     s.cfg.Models.Write,
+			"lint":      s.cfg.Models.Lint,
+			"query":     s.cfg.Models.Query,
+		}
+		embed := map[string]any{}
+		if s.cfg.Embed != nil {
+			embed = map[string]any{
+				"provider":   s.cfg.Embed.Provider,
+				"model":      s.cfg.Embed.Model,
+				"dimensions": s.cfg.Embed.Dimensions,
+				"base_url":   s.cfg.Embed.BaseURL,
+				"api_key":    maskKey(s.cfg.Embed.APIKey),
+				"rate_limit": s.cfg.Embed.RateLimit,
+			}
+		}
+		compiler := map[string]any{
+			"max_parallel":      s.cfg.Compiler.MaxParallel,
+			"summary_max_tokens": s.cfg.Compiler.SummaryMaxTokens,
+			"article_max_tokens": s.cfg.Compiler.ArticleMaxTokens,
+			"mode":              s.cfg.Compiler.Mode,
+		}
+		search := map[string]any{
+			"default_limit": s.cfg.Search.DefaultLimit,
+		}
+		serve := map[string]any{
+			"port": s.cfg.Serve.Port,
+		}
+		resp := map[string]any{
+			"project":     s.cfg.Project,
+			"description": s.cfg.Description,
+			"language":    s.cfg.Language,
+			"output":      s.cfg.Output,
+			"api":         api,
+			"models":      models,
+			"embed":       embed,
+			"compiler":    compiler,
+			"search":      search,
+			"serve":       serve,
+			"llm_api_base":     s.cfg.API.BaseURL,
+			"embedding_api_base": func() string {
+				if s.cfg.Embed != nil {
+					return s.cfg.Embed.BaseURL
+				}
+				return ""
+			}(),
+		}
+		writeJSON(w, resp)
 	case http.MethodPut, http.MethodPost:
 		var updates map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
@@ -136,6 +208,32 @@ func (s *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if v, ok := updates["api_base"]; ok {
 			if s, ok := v.(string); ok {
 				newCfg.API.BaseURL = s
+			}
+		}
+		// description (P1-1: was missing from POST)
+		if v, ok := updates["description"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.Description = s
+			}
+		}
+		// API provider (was missing)
+		if v, ok := updates["api_provider"]; ok {
+			if s, ok := v.(string); ok {
+				newCfg.API.Provider = s
+			}
+		}
+		// Embedding rate limit (was missing)
+		if v, ok := updates["embedding_rate_limit"]; ok {
+			if newCfg.Embed == nil {
+				newCfg.Embed = &config.EmbedConfig{}
+			}
+			switch dv := v.(type) {
+			case float64:
+				newCfg.Embed.RateLimit = int(dv)
+			case string:
+				if n, err := strconv.Atoi(dv); err == nil {
+					newCfg.Embed.RateLimit = n
+				}
 			}
 		}
 		if err := newCfg.Save(cfgPath); err != nil {
