@@ -41,7 +41,7 @@ type Server struct {
 // NewServer creates an MCP server with read tools registered.
 // If coordinator is provided, it's used to serialize compile-on-demand
 // with background compiles. If nil, a new coordinator is created.
-func NewServer(projectDir string, coordinator ...*compiler.CompileCoordinator) (*Server, error) {
+func NewServer(projectDir string, version string, coordinator ...*compiler.CompileCoordinator) (*Server, error) {
 	cfgPath := filepath.Join(projectDir, "config.yaml")
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -83,7 +83,7 @@ func NewServer(projectDir string, coordinator ...*compiler.CompileCoordinator) (
 
 	mcpServer := server.NewMCPServer(
 		"sage-wiki",
-		"0.1.0",
+		version,
 		server.WithToolCapabilities(true),
 	)
 

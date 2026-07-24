@@ -46,7 +46,7 @@ var (
 // Defaults are non-blank so `sage-wiki version` from a plain `go build` is
 // still readable.
 var (
-	version = "1.1.1"
+	version = "1.1.2"
 	commit  = "none"
 	date    = "unknown"
 )
@@ -482,7 +482,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// MCP server mode
-	srv, err := mcppkg.NewServer(dir)
+	srv, err := mcppkg.NewServer(dir, version)
 	if err != nil {
 		return err
 	}

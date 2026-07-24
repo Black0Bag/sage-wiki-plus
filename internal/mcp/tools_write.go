@@ -584,9 +584,8 @@ func (s *Server) handleCompileDiff(ctx context.Context, req mcplib.CallToolReque
 }
 
 func (s *Server) tryEmbed(id string, content string) {
-	embedder := embed.NewFromConfig(s.cfg)
-	if embedder != nil {
-		if vec, err := embedder.Embed(content); err == nil {
+	if s.embedder != nil {
+		if vec, err := s.embedder.Embed(content); err == nil {
 			s.vec.Upsert(id, vec)
 		}
 	}
