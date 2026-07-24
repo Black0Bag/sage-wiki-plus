@@ -16,7 +16,6 @@ import (
 	"github.com/Black0Bag/sage-wiki-plus/internal/auth"
 	"github.com/Black0Bag/sage-wiki-plus/internal/compiler"
 	"github.com/Black0Bag/sage-wiki-plus/internal/config"
-	"github.com/Black0Bag/sage-wiki-plus/internal/embed"
 	gitpkg "github.com/Black0Bag/sage-wiki-plus/internal/git"
 	"github.com/Black0Bag/sage-wiki-plus/internal/linter"
 	"github.com/Black0Bag/sage-wiki-plus/internal/llm"
